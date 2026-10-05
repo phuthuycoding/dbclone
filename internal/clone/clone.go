@@ -22,6 +22,7 @@ import (
 	"regexp"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/sync/errgroup"
@@ -65,7 +66,9 @@ type Reporter interface {
 type Options struct {
 	Parallel int  // global pool size: concurrent streams across all databases
 	Workers  int  // max concurrent streams for one database
-	Fresh    bool // drop each local database before cloning it
+	Fresh    bool // drop each target database cloned whole before cloning it
+	Source   driver.Endpoint
+	Target   driver.Endpoint
 	LogDir   string
 }
 
@@ -116,7 +119,7 @@ func Run(ctx context.Context, jobs []Job, reps []Reporter, opt Options) []Result
 	planning.SetLimit(8)
 	for _, t := range tasks {
 		planning.Go(func() error {
-			if err := t.prepare(opt.Workers, opt.Fresh); err != nil {
+			if err := t.prepare(opt); err != nil {
 				t.fail(err)
 			}
 			return nil
@@ -175,7 +178,7 @@ func Run(ctx context.Context, jobs []Job, reps []Reporter, opt Options) []Result
 	return results
 }
 
-func (t *task) prepare(workers int, fresh bool) error {
+func (t *task) prepare(opt Options) error {
 	d, db := t.job.Driver, t.job.DB
 	if !validName.MatchString(db) {
 		return fmt.Errorf("database name %q has unsupported characters", db)
@@ -185,7 +188,7 @@ func (t *task) prepare(workers int, fresh bool) error {
 		return err
 	}
 	t.log = &logWriter{f: f, d: d, rep: t.rep}
-	if t.plan, err = d.Plan(t.ctx, db, workers, t.job.Only); err != nil {
+	if t.plan, err = d.Plan(t.ctx, opt.Source, opt.Target, db, opt.Workers, t.job.Only); err != nil {
 		return fmt.Errorf("plan: %w", err)
 	}
 	for _, w := range t.plan.Warnings {
@@ -193,8 +196,8 @@ func (t *task) prepare(workers int, fresh bool) error {
 	}
 	// A subset only replaces its own objects (each restore drops what it brings), so the
 	// database itself is dropped only when it is cloned whole.
-	if err := d.Prepare(t.ctx, db, fresh && len(t.job.Only) == 0); err != nil {
-		return fmt.Errorf("prepare local database: %w", err)
+	if err := d.Prepare(t.ctx, opt.Target, db, opt.Fresh && len(t.job.Only) == 0); err != nil {
+		return fmt.Errorf("prepare target database: %w", err)
 	}
 	t.rep.Start(t.plan.Estimate)
 	return nil
@@ -235,7 +238,7 @@ func (t *task) stream(s driver.Stream) {
 		if err == nil {
 			return
 		}
-		if t.ctx.Err() != nil || attempt == attempts {
+		if t.ctx.Err() != nil || attempt == attempts || t.log.permanent.Swap(false) {
 			t.fail(fmt.Errorf("%s: %w", name, err))
 			return
 		}
@@ -351,11 +354,12 @@ func (m *meter) Write(p []byte) (int, error) {
 // logWriter copies tool output to the job log and lets the driver read stages from it.
 // All streams of a job write to it concurrently, hence the mutex.
 type logWriter struct {
-	mu   sync.Mutex
-	f    *os.File
-	d    driver.Driver
-	rep  Reporter
-	part []byte
+	permanent atomic.Bool // a tool reported an error no retry can fix
+	mu        sync.Mutex
+	f         *os.File
+	d         driver.Driver
+	rep       Reporter
+	part      []byte
 }
 
 // Output is written a whole line at a time so every line can be redacted before it
@@ -375,6 +379,9 @@ func (l *logWriter) Write(p []byte) (int, error) {
 		}
 		if s := l.d.StageFromLog(line); s != "" {
 			l.rep.Stage(s)
+		}
+		if l.d.Permanent(line) {
+			l.permanent.Store(true)
 		}
 		l.part = l.part[i+1:]
 	}

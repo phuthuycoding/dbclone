@@ -3,24 +3,24 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>dbclone — Clone MongoDB &amp; MySQL from staging to local Docker</title>
-<meta name="description" content="dbclone is a free, open-source CLI that clones MongoDB and MySQL databases — or just the tables you pick — from staging into local Docker containers, in parallel, with retries and live progress.">
-<meta name="keywords" content="clone mongodb database, copy mysql database to local, mongodump mongorestore, mysqldump, staging to local, docker database, database clone cli, golang cli, dev data">
+<title>dbclone — Clone MongoDB &amp; MySQL between any two servers</title>
+<meta name="description" content="dbclone is a free, open-source CLI that clones MongoDB and MySQL databases — or just the tables you pick — between any two servers: staging to local, prod to local, local to staging. Parallel, with retries and live progress.">
+<meta name="keywords" content="clone mongodb database, copy mysql database, copy database between servers, staging to local, prod to local, mongodump mongorestore, mysqldump, docker database, database clone cli, golang cli">
 <link rel="canonical" href="https://phuthuycoding.github.io/dbclone/">
 <meta name="theme-color" content="#0b0f14">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="dbclone">
-<meta property="og:title" content="dbclone — Clone MongoDB & MySQL from staging to local Docker">
-<meta property="og:description" content="Pick databases or single tables, stream them into your local containers in parallel, with retries and live progress. Open source, MIT.">
+<meta property="og:title" content="dbclone — Clone MongoDB & MySQL between any two servers">
+<meta property="og:description" content="staging → local, prod → local, local → staging. Pick databases or single tables and stream them in parallel, with retries and live progress. Open source, MIT.">
 <meta property="og:url" content="https://phuthuycoding.github.io/dbclone/">
 <meta property="og:image" content="https://phuthuycoding.github.io/dbclone/og.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="dbclone — Clone MongoDB & MySQL from staging to local Docker">
-<meta name="twitter:description" content="Pick databases or single tables, stream them into your local containers in parallel, with retries and live progress.">
+<meta name="twitter:title" content="dbclone — Clone MongoDB & MySQL between any two servers">
+<meta name="twitter:description" content="staging → local, prod → local, local → staging. Pick databases or single tables and stream them in parallel, with retries and live progress.">
 <meta name="twitter:image" content="https://phuthuycoding.github.io/dbclone/og.png">
 
 <script type="application/ld+json">
@@ -28,7 +28,7 @@
   "@context": "https://schema.org",
   "@type": "SoftwareApplication",
   "name": "dbclone",
-  "description": "CLI that clones MongoDB and MySQL databases, or selected tables and collections, from a staging server into local Docker containers with parallel streaming, retries and live progress.",
+  "description": "CLI that clones MongoDB and MySQL databases, or selected tables and collections, between any two servers — staging, production or local Docker containers — with parallel streaming, retries and live progress.",
   "applicationCategory": "DeveloperApplication",
   "operatingSystem": "Linux, macOS, Windows",
   "softwareVersion": "0.1.1",
@@ -49,8 +49,10 @@
      "acceptedAnswer": {"@type": "Answer", "text": "No. dbclone runs the dump and restore tools that already ship in the official mongo and mysql images, inside your local containers. You only need Docker."}},
     {"@type": "Question", "name": "Can I clone only some tables or collections?",
      "acceptedAnswer": {"@type": "Answer", "text": "Yes. After picking databases you can narrow any of them down to specific tables or collections, or pass them on the command line, e.g. dbclone -only mongo:shop.orders,mysql:app.users."}},
-    {"@type": "Question", "name": "What happens to data that already exists locally?",
-     "acceptedAnswer": {"@type": "Answer", "text": "Objects that exist on the source are dropped and recreated locally; objects that exist only locally are kept. With -fresh, a database cloned whole is dropped first so the local copy is identical to the source."}},
+    {"@type": "Question", "name": "Can I copy data from local up to staging, or between two servers?",
+     "acceptedAnswer": {"@type": "Answer", "text": "Yes. Save your servers as profiles and clone from any profile to any other, including the built-in local profile for your Docker containers. Writing to anything but local requires typing the target's name, -fresh is only allowed on local, and a server is never cloned onto itself."}},
+    {"@type": "Question", "name": "What happens to data that already exists on the target?",
+     "acceptedAnswer": {"@type": "Answer", "text": "Objects that exist on the source are dropped and recreated on the target; objects that exist only on the target are kept. With -fresh (local target only), a database cloned whole is dropped first so the copy is identical to the source."}},
     {"@type": "Question", "name": "Is dbclone a backup tool?",
      "acceptedAnswer": {"@type": "Answer", "text": "No. It is built for development data. MySQL table groups are dumped in separate transactions, so a copy is not one consistent point in time across tables."}},
     {"@type": "Question", "name": "What if the connection to staging drops during a copy?",
@@ -213,7 +215,7 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 14px; justify-content: space
 <header class="hero" id="top">
   <div class="wrap">
     <span class="pill"><b id="ver">v0.1.1</b> · open source · MIT · Go</span>
-    <h1>Clone <span class="grad">MongoDB &amp; MySQL</span><br>from staging to local Docker</h1>
+    <h1>Clone <span class="grad">MongoDB &amp; MySQL</span><br>between any two servers</h1>
     <p class="typed" aria-live="polite"><span class="sr-only">dbclone: </span><span class="t" id="typed">Pick databases or single tables.</span><span class="caret" aria-hidden="true"></span></p>
     <div class="cta">
       <div class="install">
@@ -228,7 +230,7 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 14px; justify-content: space
       <div class="term">
         <div class="term-bar"><i></i><i></i><i></i><span>~/project — dbclone</span></div>
         <div class="screen" id="screen" aria-hidden="true"></div>
-        <p class="sr-only">Animated demo: dbclone checks Docker and the local mongodb and mysql containers, the user picks three databases, and three progress bars stream them in parallel, including one automatic retry, until all databases are done.</p>
+        <p class="sr-only">Animated demo: dbclone checks Docker and the local mongodb and mysql containers, the user clones from the staging profile to local and picks three databases, and three progress bars stream them in parallel, including one automatic retry, until all databases are done.</p>
       </div>
     </div>
   </div>
@@ -238,15 +240,17 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 14px; justify-content: space
 <section id="features">
   <div class="wrap">
     <div class="kicker reveal">Features</div>
-    <h2 class="reveal">Real data on your laptop, without the scripts</h2>
-    <p class="lead reveal">One command replaces the dump-copy-restore dance. dbclone picks the work apart, runs it in parallel and keeps you informed the whole way.</p>
+    <h2 class="reveal">Move real data anywhere, without the scripts</h2>
+    <p class="lead reveal">One command replaces the dump-copy-restore dance — in whichever direction you need. dbclone picks the work apart, runs it in parallel and keeps you informed the whole way.</p>
     <div class="grid">
+      <article class="card reveal"><div class="ic">🔀</div><h3>Any direction</h3><p>Save servers as profiles — staging, prod, a teammate's box — and clone from any of them to any other. Your Docker containers are the built-in <code>local</code>.</p></article>
+      <article class="card reveal"><div class="ic">🛡️</div><h3>Safe by default</h3><p>Writing anywhere but <code>local</code> means typing the target's name. Dropping whole databases only works on <code>local</code>, and a server is never cloned onto itself.</p></article>
       <article class="card reveal"><div class="ic">🐳</div><h3>Nothing to install</h3><p>Runs mongodump, mongorestore, mysqldump and mysql inside your local official containers — client versions always match the server.</p></article>
       <article class="card reveal"><div class="ic">⚡</div><h3>Parallel streaming</h3><p>One weighted pool shared by every database, biggest work first. Dumps pipe straight into restores — no dump files on disk.</p></article>
       <article class="card reveal"><div class="ic">🎯</div><h3>Pick tables, not just databases</h3><p>Tick whole databases or narrow any of them to the tables and collections you need. Everything else stays untouched.</p></article>
-      <article class="card reveal"><div class="ic">🔁</div><h3>Survives flaky links</h3><p>Each stream retries three times with backoff. Big collections run on their own, so a drop only re-copies what was lost.</p></article>
+      <article class="card reveal"><div class="ic">🔁</div><h3>Survives flaky links</h3><p>Each stream retries three times with backoff; errors no retry can fix, like access denied, stop at once. Big collections run on their own, so a drop only re-copies what was lost.</p></article>
       <article class="card reveal"><div class="ic">📊</div><h3>Live progress</h3><p>A line per database: current table, active streams, percent, bytes, speed and time — plus a log file per database.</p></article>
-      <article class="card reveal"><div class="ic">🔒</div><h3>Secrets stay secret</h3><p>Passwords travel as environment variables, never on a command line, and every log line is scrubbed of credentials.</p></article>
+      <article class="card reveal"><div class="ic">🔒</div><h3>Secrets stay secret</h3><p>Passwords travel as environment variables, never on a command line. Profiles are saved with mode 0600 and every log line is scrubbed of credentials.</p></article>
       <article class="card reveal"><div class="ic">🩺</div><h3>Guided setup</h3><p><code>dbclone -check</code> verifies Docker and your containers and prints the exact command to fix anything missing.</p></article>
       <article class="card reveal"><div class="ic">🧩</div><h3>Pluggable engines</h3><p>MongoDB and MySQL today. Engines are adapters behind one interface — scheduling, retries and UI come for free.</p></article>
     </div>
@@ -256,19 +260,19 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 14px; justify-content: space
 <section id="how">
   <div class="wrap">
     <div class="kicker reveal">How it works</div>
-    <h2 class="reveal">Straight from the source into your container</h2>
-    <p class="lead reveal">Every stream is a pipe that lives inside your local container. Data crosses the network once and never touches your disk as a dump file.</p>
+    <h2 class="reveal">From any profile, to any profile</h2>
+    <p class="lead reveal">Every stream is a pipe that runs inside your local container, with the official tools. Data never touches your disk as a dump file.</p>
     <div class="flow reveal">
-      <div class="node"><b>Staging</b><small>MongoDB · MySQL</small></div>
+      <div class="node"><b>Source</b><small>staging · prod · local</small></div>
       <div class="arrow"><span class="packet"></span></div>
       <div class="node box"><b>Local container</b><small>official mongo / mysql image</small>
         <div class="pipe"><span class="c-acc">dump</span><span class="c-dim">──pipe──▶</span><span class="c-vio">restore</span></div></div>
       <div class="arrow"><span class="packet" style="animation-delay:.8s"></span></div>
-      <div class="node"><b>localhost</b><small>your dev database</small></div>
+      <div class="node"><b>Target</b><small>local · staging · any profile</small></div>
     </div>
     <div class="grid" style="margin-top:22px">
       <article class="card reveal"><h3>MongoDB</h3><p>Collections of 64&nbsp;MiB or more get their own stream; the rest, views included, share one more that copies several collections at once.</p></article>
-      <article class="card reveal"><h3>MySQL</h3><p>Tables are split into size-balanced groups, one stream each. Views, routines and events follow once the tables are in.</p></article>
+      <article class="card reveal"><h3>MySQL</h3><p>Tables are split into size-balanced groups, one stream each. Triggers, views, routines and events follow once the data is in.</p></article>
       <article class="card reveal"><h3>Scheduling</h3><p>Streams from all databases share <code>-j</code> slots and start biggest first, so a slot freed by a small database goes straight to a big one.</p></article>
     </div>
   </div>
@@ -278,7 +282,7 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 14px; justify-content: space
   <div class="wrap">
     <div class="kicker reveal">Get started</div>
     <h2 class="reveal">Up and running in a minute</h2>
-    <p class="lead reveal">You need Docker with the official <code>mongo</code> and/or <code>mysql</code> images running locally. dbclone checks this for you.</p>
+    <p class="lead reveal">You need Docker with the official <code>mongo</code> and/or <code>mysql</code> images running locally — their tools do the work. dbclone checks this for you, then helps you add your servers as profiles.</p>
     <div class="steps">
       <div class="step reveal"><h3>Install</h3><pre><code>go install github.com/phuthuycoding/dbclone@latest
 <span class="cm"># or grab a binary for Linux, macOS, Windows</span>
@@ -287,9 +291,10 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 14px; justify-content: space
 <span class="c-ok">✓</span> Docker  29.8.2
 <span class="c-ok">✓</span> mongo: local container "mongodb"  running
 <span class="c-ok">✓</span> mysql: local container "mysql"  running</code></pre></div>
-      <div class="step reveal"><h3>Clone</h3><pre><code>dbclone                     <span class="cm"># guided picker</span>
-dbclone -only mongo:shop.orders,mysql:app
-dbclone -all -fresh -j 3 -w 2  <span class="cm"># exact copy</span></code></pre></div>
+      <div class="step reveal"><h3>Clone</h3><pre><code>dbclone                        <span class="cm"># guided: from, to, pick</span>
+dbclone -from prod -only mysql:app.users
+dbclone -from local -to staging \
+        -only mysql:app -confirm staging</code></pre></div>
     </div>
   </div>
 </section>
@@ -302,15 +307,18 @@ dbclone -all -fresh -j 3 -w 2  <span class="cm"># exact copy</span></code></pre>
       <table>
         <thead><tr><th>Flag</th><th>Default</th><th>What it does</th></tr></thead>
         <tbody>
+          <tr><td><code>-from</code></td><td>asked</td><td>Source profile (<code>local</code> = your Docker containers)</td></tr>
+          <tr><td><code>-to</code></td><td><code>local</code></td><td>Target profile</td></tr>
+          <tr><td><code>-confirm</code></td><td></td><td>The target's name; required to write to a non-local target without the prompt</td></tr>
           <tr><td><code>-j</code></td><td>8</td><td>Global pool: concurrent dump→restore streams across all databases</td></tr>
           <tr><td><code>-w</code></td><td>4</td><td>Max streams for one database</td></tr>
           <tr><td><code>-only</code></td><td></td><td><code>engine:db</code> or <code>engine:db.object</code>, comma separated; skips the picker</td></tr>
           <tr><td><code>-all</code></td><td>off</td><td>Clone every database on the source</td></tr>
-          <tr><td><code>-fresh</code></td><td>off</td><td>Drop each wholly-cloned local database first, for an identical copy</td></tr>
-          <tr><td><code>-yes</code></td><td>off</td><td>Do not ask before overwriting local databases</td></tr>
+          <tr><td><code>-fresh</code></td><td>off</td><td>Drop each wholly-cloned database on the target first, for an identical copy — <code>local</code> only</td></tr>
+          <tr><td><code>-yes</code></td><td>off</td><td>Do not ask before overwriting databases on the <code>local</code> target</td></tr>
           <tr><td><code>-check</code></td><td></td><td>Check Docker and the local containers, then exit</td></tr>
-          <tr><td><code>-setup</code></td><td>off</td><td>Re-enter the source connections</td></tr>
-          <tr><td><code>-env</code></td><td><code>.env.staging</code></td><td>Connection file (saved with mode 0600)</td></tr>
+          <tr><td><code>-setup</code></td><td>off</td><td>Add, edit or delete connection profiles</td></tr>
+          <tr><td><code>-config</code></td><td>user config dir</td><td>Profiles file (saved with mode 0600)</td></tr>
           <tr><td><code>-logs</code></td><td><code>logs</code></td><td>Per-database tool output, one folder per run</td></tr>
         </tbody>
       </table>
@@ -324,7 +332,8 @@ dbclone -all -fresh -j 3 -w 2  <span class="cm"># exact copy</span></code></pre>
     <h2 class="reveal">Questions</h2>
     <details class="reveal"><summary>Do I need mongodump or mysqldump installed?</summary><p>No. dbclone runs the dump and restore tools that already ship in the official <code>mongo</code> and <code>mysql</code> images, inside your local containers. You only need Docker.</p></details>
     <details class="reveal"><summary>Can I clone only some tables or collections?</summary><p>Yes. After picking databases you can narrow any of them down to specific tables or collections, or pass them on the command line: <code>dbclone -only mongo:shop.orders,mysql:app.users</code>.</p></details>
-    <details class="reveal"><summary>What happens to data that already exists locally?</summary><p>Objects that exist on the source are dropped and recreated locally; objects that exist only locally are kept. With <code>-fresh</code>, a database cloned whole is dropped first so the local copy is identical to the source. dbclone lists everything it will overwrite and asks first.</p></details>
+    <details class="reveal"><summary>Can I copy data from local up to staging, or between two servers?</summary><p>Yes. Save your servers as profiles and clone from any profile to any other, including the built-in <code>local</code> profile for your Docker containers: <code>dbclone -from local -to staging</code>. Writing to anything but <code>local</code> requires typing the target's name, <code>-fresh</code> is only allowed on <code>local</code>, and a server is never cloned onto itself.</p></details>
+    <details class="reveal"><summary>What happens to data that already exists on the target?</summary><p>Objects that exist on the source are dropped and recreated on the target; objects that exist only on the target are kept. With <code>-fresh</code> (local target only), a database cloned whole is dropped first so the copy is identical to the source. dbclone lists everything it will write and asks first.</p></details>
     <details class="reveal"><summary>Is dbclone a backup tool?</summary><p>No — it is built for development data. MySQL table groups are dumped in separate transactions, so a copy is not one consistent point in time across tables.</p></details>
     <details class="reveal"><summary>What if the connection to staging drops during a copy?</summary><p>Every stream is retried up to three times with backoff, and restores drop-and-recreate, so a retry starts clean. Large MongoDB collections run as their own streams, so only the affected collection is copied again. On a busy source, lower the load with <code>-j 3 -w 2</code>.</p></details>
   </div>
@@ -361,11 +370,11 @@ dbclone -all -fresh -j 3 -w 2  <span class="cm"># exact copy</span></code></pre>
 
   // ---- typewriter (type, pause, delete, next)
   const phrases = [
-    "Clone staging MongoDB to localhost.",
-    "Copy only the MySQL tables you need.",
-    "Stream dumps in parallel — no dump files.",
-    "Retry flaky connections automatically.",
-    "Check your Docker setup with -check.",
+    "staging → local in one command.",
+    "prod → local, only the tables you need.",
+    "local → staging, after you type its name.",
+    "Parallel streams — no dump files.",
+    "Retries flaky connections automatically.",
   ];
   const typed = document.getElementById("typed");
   async function typeLoop() {
@@ -407,7 +416,7 @@ dbclone -all -fresh -j 3 -w 2  <span class="cm"># exact copy</span></code></pre>
 
   async function demo() {
     lines.length = 0; render();
-    await typeCmd("dbclone");
+    await typeCmd("dbclone -from staging");
     push("Checking local setup"); await sleep(250);
     for (const l of ['Docker  <span class="c-dim">29.8.2</span>', 'mongo: local container "mongodb"  <span class="c-dim">running</span>', 'mysql: local container "mysql"  <span class="c-dim">running</span>']) {
       push('  <span class="c-ok">✓</span> ' + l); await sleep(320);
@@ -428,8 +437,8 @@ dbclone -all -fresh -j 3 -w 2  <span class="cm"># exact copy</span></code></pre>
     await sleep(500);
     lines.length = head; render();
 
-    push(narrow ? "Cloning 3 databases · pool 8 · max 4/db"
-      : 'Cloning 3 databases · pool 8 streams · max 4 streams/db · logs: <span class="c-dim">logs/20261005-101500</span>');
+    push(narrow ? 'Cloning 3 databases <span class="c-acc">staging → local</span>'
+      : 'Cloning 3 databases <span class="c-acc">staging → local</span> · pool 8 streams · max 4 streams/db · logs: <span class="c-dim">logs/20261005-101500</span>');
     push("");
     // Simulated clock: the demo plays in ~8 s but shows the numbers of a ~2 minute run.
     const SIM = 15;
@@ -475,7 +484,7 @@ dbclone -all -fresh -j 3 -w 2  <span class="cm"># exact copy</span></code></pre>
       await sleep(90);
     }
     push("");
-    push('<span class="c-warn">!</span> mysql:crm: events skipped' + (narrow ? "" : ": staging user cannot SHOW EVENTS"));
+    push('<span class="c-warn">!</span> mysql:crm: events skipped' + (narrow ? "" : ": source user cannot SHOW EVENTS"));
     push("");
     const secs = Math.round(elapsed);
     push('<span class="c-ok">Done 3/3 databases</span> in ' + (secs >= 60 ? Math.floor(secs / 60) + "m" : "") + (secs % 60) + "s");
@@ -484,13 +493,13 @@ dbclone -all -fresh -j 3 -w 2  <span class="cm"># exact copy</span></code></pre>
 
   async function staticFrame() {
     screen.innerHTML = [
-      '<span class="c-acc">~/project</span> <span class="c-dim">$</span> dbclone',
+      '<span class="c-acc">~/project</span> <span class="c-dim">$</span> dbclone -from staging',
       "Checking local setup",
       '  <span class="c-ok">✓</span> Docker  <span class="c-dim">29.8.2</span>',
       '  <span class="c-ok">✓</span> mongo: local container "mongodb"  <span class="c-dim">running</span>',
       '  <span class="c-ok">✓</span> mysql: local container "mysql"  <span class="c-dim">running</span>',
       "",
-      "Cloning 3 databases · pool 8 streams · max 4 streams/db",
+      'Cloning 3 databases <span class="c-acc">staging → local</span> · pool 8 streams · max 4 streams/db',
       "",
       '<span class="c-ok">✓</span> mongo:shop  done                  ' + bar(100) + " 100%  2.8 GiB",
       '<span class="c-ok">✓</span> mysql:app   done                  ' + bar(100) + " 100%  820.0 MiB",

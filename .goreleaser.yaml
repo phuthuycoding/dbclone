@@ -17,7 +17,7 @@ archives:
     files:
       - LICENSE
       - README.md
-      - .env.staging.example
+      - profiles.example.json
 
 checksum:
   name_template: checksums.txt

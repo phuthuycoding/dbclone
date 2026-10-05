@@ -1,0 +1,22 @@
+{
+  "profiles": [
+    {
+      "name": "staging",
+      "values": {
+        "mongo.uri": "mongodb://user:password@staging-host:27017/?authSource=admin",
+        "mysql.host": "staging-host",
+        "mysql.port": "3306",
+        "mysql.user": "reader",
+        "mysql.password": "password"
+      }
+    },
+    {
+      "name": "prod",
+      "values": {
+        "mysql.host": "prod-replica-host",
+        "mysql.user": "readonly",
+        "mysql.password": "password"
+      }
+    }
+  ]
+}

@@ -1,10 +1,10 @@
-// Package mongo is the MongoDB driver: mongodump --archive | mongorestore --archive.
+// Package mongo is the MongoDB driver: mongodump --archive | mongorestore --archive, both
+// run inside the local mongo container towards any pair of endpoints.
 package mongo
 
 import (
 	"context"
 	"fmt"
-	"os"
 	"os/exec"
 	"regexp"
 	"strconv"
@@ -15,36 +15,21 @@ import (
 )
 
 const (
-	keyURI = "STG_MONGO_URI"
+	keyURI = "mongo.uri"
 
-	listDBs = `db.adminCommand({listDatabases:1,nameOnly:true}).databases.map(d=>d.name).join("\n")`
-	// The local container already carries its root credentials from docker-compose.
+	// The local endpoint logs in with the root credentials the container was created with.
 	localAuth = `-u "$MONGO_INITDB_ROOT_USERNAME" -p "$MONGO_INITDB_ROOT_PASSWORD" --authenticationDatabase admin`
 
-	scriptListSource = `mongosh "$STG_MONGO_URI" --quiet --eval '` + listDBs + `'`
-	scriptListLocal  = `mongosh ` + localAuth + ` --quiet --eval '` + listDBs + `'`
+	listDBs = `db.adminCommand({listDatabases:1,nameOnly:true}).databases.map(d=>d.name).join("\n")`
 	// One line per collection: name, type, size in bytes (0 when collStats is not allowed).
-	scriptCollections = `mongosh "$STG_MONGO_URI" --quiet --eval '
+	listCollections = `
 const d = db.getSiblingDB(process.env.DB);
 d.getCollectionInfos().forEach(c => {
   let size = 0;
   if (c.type === "collection") { try { size = d.getCollection(c.name).stats().size } catch (e) {} }
   print(c.name + "\t" + c.type + "\t" + size);
-})'`
-	// No --gzip: dump and restore run side by side in the local container, so compressing
-	// the pipe only burns CPU. The network leg is the mongo wire protocol either way.
-	//
-	// A big collection gets its own stream: it is scheduled and retried on its own, and the
-	// local insert side — the slower half of the pipe — gets several insertion workers.
-	scriptDumpOne    = `mongodump --uri="$STG_MONGO_URI" --db="$DB" --collection="$COLL" --archive`
-	scriptRestoreOne = `mongorestore ` + localAuth + ` --archive --nsInclude="$DB.$COLL" --drop --numInsertionWorkersPerCollection=4`
-	// Everything else (small collections, views) travels in one stream. $EXCLUDES is a list of
-	// --excludeCollection flags for names validated against safeName, so it splits cleanly.
-	scriptDumpRest    = `mongodump --uri="$STG_MONGO_URI" --db="$DB" --archive --numParallelCollections="$WORKERS" $EXCLUDES`
-	scriptRestoreRest = `mongorestore ` + localAuth + ` --archive --nsInclude="$DB.*" --drop` +
-		` --numParallelCollections="$WORKERS" --numInsertionWorkersPerCollection=2`
-
-	scriptDropLocal = `mongosh ` + localAuth + ` --quiet --eval 'db.getSiblingDB(process.env.DB).dropDatabase()'`
+})`
+	dropDB = `db.getSiblingDB(process.env.DB).dropDatabase()`
 
 	// Collections at least this big are cloned as their own stream.
 	splitSize = 64 << 20
@@ -66,13 +51,25 @@ func (*Driver) Fields() []driver.Field {
 	return []driver.Field{{
 		Key:         keyURI,
 		Title:       "MongoDB URI",
-		Description: "Leave empty to skip MongoDB",
+		Description: "Leave empty if this profile has no MongoDB",
 		Placeholder: "mongodb://user:pass@host:27017/?authSource=admin",
 		Secret:      true,
 	}}
 }
 
-func (*Driver) Configured() bool { return os.Getenv(keyURI) != "" }
+func (*Driver) Configured(ep driver.Endpoint) bool { return ep.Local || ep.Get(keyURI) != "" }
+
+// Address is the host list of the URI, credentials and options left out.
+func (*Driver) Address(ep driver.Endpoint) string {
+	if ep.Local {
+		return driver.LocalName
+	}
+	_, rest, _ := strings.Cut(serverURI(ep.Get(keyURI)), "://")
+	rest = rest[strings.LastIndex(rest, "@")+1:]
+	host, _, _ := strings.Cut(rest, "/")
+	host, _, _ = strings.Cut(host, "?")
+	return strings.ToLower(host)
+}
 
 func container() string { return driver.Env("DBCLONE_MONGO_CONTAINER", "mongodb") }
 
@@ -87,12 +84,29 @@ func (*Driver) Local() driver.Local {
 	}
 }
 
-func sh(ctx context.Context, script string, stdin bool, vars map[string]string) *exec.Cmd {
-	env := map[string]string{keyURI: serverURI(os.Getenv(keyURI)), "DB": "", "COLL": "", "EXCLUDES": "", "WORKERS": "1"}
-	for k, v := range vars {
-		env[k] = v
+// conn returns how mongosh (shell) and the dump/restore tools (tool) reach ep, plus the
+// env var carrying its URI. Values only travel as env vars; scripts reference "$NAME".
+func conn(ep driver.Endpoint, name string) (shell, tool string, env map[string]string) {
+	if ep.Local {
+		return localAuth, localAuth, nil
 	}
-	return docker.Sh(ctx, container(), script, stdin, env)
+	return `"$` + name + `"`, `--uri="$` + name + `"`, map[string]string{name: serverURI(ep.Get(keyURI))}
+}
+
+func sh(ctx context.Context, script string, stdin bool, env ...map[string]string) *exec.Cmd {
+	all := map[string]string{}
+	for _, m := range env {
+		for k, v := range m {
+			all[k] = v
+		}
+	}
+	return docker.Sh(ctx, container(), script, stdin, all)
+}
+
+// eval runs a mongosh script against ep.
+func eval(ctx context.Context, ep driver.Endpoint, js string, vars map[string]string) (string, error) {
+	shell, _, env := conn(ep, "URI")
+	return docker.Output(sh(ctx, `mongosh `+shell+` --quiet --eval '`+js+`'`, false, env, vars))
 }
 
 // serverURI drops the database path from a connection string, because mongodump refuses
@@ -126,16 +140,16 @@ func serverURI(uri string) string {
 	return scheme + "://" + authority + "/?" + query
 }
 
-func (*Driver) ListSource(ctx context.Context) ([]string, error) {
-	return docker.Lines(sh(ctx, scriptListSource, false, nil), systemDBs...)
+func (*Driver) Databases(ctx context.Context, ep driver.Endpoint) ([]string, error) {
+	out, err := eval(ctx, ep, listDBs, nil)
+	if err != nil {
+		return nil, err
+	}
+	return docker.SplitLines(out, systemDBs...), nil
 }
 
-func (*Driver) ListLocal(ctx context.Context) ([]string, error) {
-	return docker.Lines(sh(ctx, scriptListLocal, false, nil), systemDBs...)
-}
-
-func (*Driver) Objects(ctx context.Context, db string) ([]driver.Object, error) {
-	out, err := docker.Output(sh(ctx, scriptCollections, false, map[string]string{"DB": db}))
+func (*Driver) Objects(ctx context.Context, ep driver.Endpoint, db string) ([]driver.Object, error) {
+	out, err := eval(ctx, ep, listCollections, map[string]string{"DB": db})
 	if err != nil {
 		return nil, err
 	}
@@ -156,14 +170,15 @@ func (*Driver) Objects(ctx context.Context, db string) ([]driver.Object, error) 
 // (small collections and views) into one more, which excludes everything that is either
 // streamed on its own or not selected. If the collections cannot be listed, the whole
 // database goes as a single stream.
-func (d *Driver) Plan(ctx context.Context, db string, workers int, only []string) (driver.Plan, error) {
-	objs, err := d.Objects(ctx, db)
+func (d *Driver) Plan(ctx context.Context, src, dst driver.Endpoint, db string, workers int, only []string) (driver.Plan, error) {
+	p := pipe{src: src, dst: dst, db: db}
+	objs, err := d.Objects(ctx, src, db)
 	if err != nil {
 		if len(only) > 0 {
 			return driver.Plan{}, fmt.Errorf("list collections: %w", err)
 		}
 		return driver.Plan{
-			Phases:   [][]driver.Stream{{rest(db, nil, 0, workers)}},
+			Phases:   [][]driver.Stream{{p.rest(nil, 0, workers)}},
 			Warnings: []string{"cannot list collections, cloning as one stream: " + err.Error()},
 		}, nil
 	}
@@ -186,56 +201,82 @@ func (d *Driver) Plan(ctx context.Context, db string, workers int, only []string
 		total += o.Size
 		if o.Kind == "collection" && o.Size >= splitSize && safeName.MatchString(o.Name) {
 			exclude = append(exclude, o.Name)
-			streams = append(streams, one(db, o.Name, o.Size))
+			streams = append(streams, p.one(o.Name, o.Size))
 			continue
 		}
 		restSize += o.Size
 		restCount++
 	}
 	if restCount > 0 {
-		streams = append(streams, rest(db, exclude, restSize, min(workers, restCount)))
+		streams = append(streams, p.rest(exclude, restSize, min(workers, restCount)))
 	}
 	return driver.Plan{Estimate: total, Phases: [][]driver.Stream{streams}}, nil
 }
 
-func one(db, coll string, size int64) driver.Stream {
-	vars := map[string]string{"DB": db, "COLL": coll}
+// pipe builds the dump → restore commands of one database between two endpoints.
+// No --gzip: dump and restore run side by side in the local container, so compressing the
+// pipe only burns CPU.
+type pipe struct {
+	src, dst driver.Endpoint
+	db       string
+}
+
+func (p pipe) stream(label string, size, weight int64, dumpArgs, restoreArgs string, vars map[string]string) driver.Stream {
+	_, srcTool, srcEnv := conn(p.src, "SRC_URI")
+	_, dstTool, dstEnv := conn(p.dst, "DST_URI")
+	vars["DB"] = p.db
 	return driver.Stream{
-		Label:   coll,
-		Size:    size,
-		Weight:  1,
-		Dump:    func(ctx context.Context) *exec.Cmd { return sh(ctx, scriptDumpOne, false, vars) },
-		Restore: func(ctx context.Context) *exec.Cmd { return sh(ctx, scriptRestoreOne, true, vars) },
+		Label:  label,
+		Size:   size,
+		Weight: weight,
+		Dump: func(ctx context.Context) *exec.Cmd {
+			return sh(ctx, `mongodump `+srcTool+` --db="$DB" --archive `+dumpArgs, false, srcEnv, vars)
+		},
+		Restore: func(ctx context.Context) *exec.Cmd {
+			return sh(ctx, `mongorestore `+dstTool+` --archive --drop `+restoreArgs, true, dstEnv, vars)
+		},
 	}
 }
 
-// rest dumps the database minus the collections that have their own stream. It moves
-// `workers` collections at once, so it holds that many pool slots.
-func rest(db string, exclude []string, size int64, workers int) driver.Stream {
+// one streams a single big collection; the restore side, the slower half of the pipe,
+// gets several insertion workers.
+func (p pipe) one(coll string, size int64) driver.Stream {
+	return p.stream(coll, size, 1,
+		`--collection="$COLL"`,
+		`--nsInclude="$DB.$COLL" --numInsertionWorkersPerCollection=4`,
+		map[string]string{"COLL": coll})
+}
+
+// rest dumps the database minus the collections that have their own stream or were not
+// selected. It moves `workers` collections at once, so it holds that many pool slots.
+// $EXCLUDES holds names validated against safeName, so its unquoted expansion splits cleanly.
+func (p pipe) rest(exclude []string, size int64, workers int) driver.Stream {
 	flags := make([]string, len(exclude))
 	for i, c := range exclude {
 		flags[i] = "--excludeCollection=" + c
 	}
 	workers = max(workers, 1)
-	vars := map[string]string{"DB": db, "EXCLUDES": strings.Join(flags, " "), "WORKERS": strconv.Itoa(workers)}
-	return driver.Stream{
-		Size:    size,
-		Weight:  int64(workers),
-		Dump:    func(ctx context.Context) *exec.Cmd { return sh(ctx, scriptDumpRest, false, vars) },
-		Restore: func(ctx context.Context) *exec.Cmd { return sh(ctx, scriptRestoreRest, true, vars) },
-	}
+	return p.stream("", size, int64(workers),
+		`--numParallelCollections="$WORKERS" $EXCLUDES`,
+		`--nsInclude="$DB.*" --numParallelCollections="$WORKERS" --numInsertionWorkersPerCollection=2`,
+		map[string]string{"EXCLUDES": strings.Join(flags, " "), "WORKERS": strconv.Itoa(workers)})
 }
 
 // Prepare only acts with fresh: mongorestore creates the database on first insert.
-func (*Driver) Prepare(ctx context.Context, db string, fresh bool) error {
+func (*Driver) Prepare(ctx context.Context, dst driver.Endpoint, db string, fresh bool) error {
 	if !fresh {
 		return nil
 	}
-	_, err := docker.Output(sh(ctx, scriptDropLocal, false, map[string]string{"DB": db}))
+	_, err := eval(ctx, dst, dropDB, map[string]string{"DB": db})
 	return err
 }
 
 func (*Driver) StageFromStream([]byte) string { return "" }
+
+// Permanent matches errors no retry can fix: authentication and authorization failures.
+func (*Driver) Permanent(line string) bool {
+	return strings.Contains(line, "Authentication failed") || strings.Contains(line, "not authorized on")
+}
 
 func (*Driver) StageFromLog(line string) string {
 	if m := restoring.FindStringSubmatch(line); m != nil {

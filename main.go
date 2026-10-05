@@ -1,13 +1,15 @@
-// dbclone copies selected databases from staging into the local docker containers.
+// dbclone clones databases between any two connections — a remote profile (staging,
+// prod, …) or the local Docker containers — in parallel, with retries and live progress.
 //
 // Layers:
 //
-//	main            flags + wiring
-//	internal/ui     terminal prompts (huh) and live progress board (mpb)
-//	internal/clone  engine: worker pool, dump → restore streaming, progress events
-//	internal/driver adapter interface; one package per engine (mongo, mysql, ...)
-//	internal/docker runs the engine's own tools inside the local containers
-//	internal/config .env.staging load/save
+//	main               flags + wiring + safety checks
+//	internal/ui        terminal prompts (huh) and live progress board (mpb)
+//	internal/clone     engine: worker pool, dump → restore streaming, progress events
+//	internal/driver    adapter interface; one package per engine (mongo, mysql, ...)
+//	internal/preflight checks Docker and the local containers before anything runs
+//	internal/docker    runs the engine's own tools inside the local containers
+//	internal/config    connection profiles
 //
 // Adding an engine = a new package implementing driver.Driver + one line in drivers below.
 package main
@@ -46,18 +48,24 @@ var drivers = []driver.Driver{
 }
 
 var (
-	envFile  = flag.String("env", ".env.staging", "file holding the staging connection settings")
-	parallel = flag.Int("j", 8, "global pool: concurrent dump→restore streams across all databases")
-	workers  = flag.Int("w", 4, "max concurrent streams for one database (mongo collections / mysql table groups)")
-	only     = flag.String("only", "", "skip the picker: comma list of engine:db or engine:db.table, e.g. mongo:shop.orders,mysql:app")
-	yes      = flag.Bool("yes", false, "do not ask before overwriting a database that already exists locally")
-	all      = flag.Bool("all", false, "skip the picker and clone every database on staging")
-	fresh    = flag.Bool("fresh", false, "drop each local database first, so local ends up identical to staging")
-	logDir   = flag.String("logs", "logs", "directory for per-database logs")
-	check    = flag.Bool("check", false, "check the local setup (Docker, containers) and exit")
-	showVer  = flag.Bool("version", false, "print the version and exit")
-	setup    = flag.Bool("setup", false, "re-enter the staging connections even if the env file exists")
+	configPath = flag.String("config", config.DefaultPath(), "connection profiles file")
+	from       = flag.String("from", "", "source profile (asked when empty; \"local\" = your Docker containers)")
+	to         = flag.String("to", "", "target profile (default local; asked when empty and run interactively)")
+	confirm    = flag.String("confirm", "", "the target profile name, required to write to a non-local target without the prompt")
+	parallel   = flag.Int("j", 8, "global pool: concurrent dump→restore streams across all databases")
+	workers    = flag.Int("w", 4, "max concurrent streams for one database (mongo collections / mysql table groups)")
+	only       = flag.String("only", "", "skip the picker: comma list of engine:db or engine:db.table, e.g. mongo:shop.orders,mysql:app")
+	yes        = flag.Bool("yes", false, "do not ask before overwriting databases on the local target")
+	all        = flag.Bool("all", false, "skip the picker and clone every database of the source")
+	fresh      = flag.Bool("fresh", false, "drop each database on the local target first, so it ends up identical to the source")
+	logDir     = flag.String("logs", "logs", "directory for per-database logs")
+	check      = flag.Bool("check", false, "check the local setup (Docker, containers) and exit")
+	setup      = flag.Bool("setup", false, "add, edit or delete connection profiles before cloning")
+	showVer    = flag.Bool("version", false, "print the version and exit")
 )
+
+// legacyEnv is the connection file of versions before profiles; it is imported once.
+const legacyEnv = ".env.staging"
 
 func main() {
 	flag.Parse()
@@ -83,12 +91,18 @@ func run() error {
 	defer stop()
 
 	report, dockerErr := preflight.Run(ctx, drivers)
-	found, err := config.Load(*envFile)
+	store, err := config.Load(*configPath)
 	if err != nil {
 		return err
 	}
-	needSetup := !found || *setup
-	if *check || needSetup || report.Failed() {
+	if added, err := store.ImportLegacy(legacyEnv); err != nil {
+		return err
+	} else if added {
+		fmt.Printf("imported %s as profile \"staging\" into %s\n\n", legacyEnv, store.Path)
+	}
+	scripted := *only != "" || *all
+	firstRun := len(store.Profiles) == 0
+	if *check || *setup || firstRun || report.Failed() {
 		ui.PrintReport(report)
 	}
 	switch {
@@ -102,53 +116,61 @@ func run() error {
 		return nil
 	}
 	ready := report.Ready
-	scripted := *only != "" || *all
-	if needSetup && scripted {
-		return fmt.Errorf("no connection file %s; run dbclone without -only/-all once to set it up", *envFile)
+
+	if *setup || (firstRun && !scripted && *from != driver.LocalName) {
+		if firstRun {
+			fmt.Println("No connection profiles yet — add the servers you clone from or to.")
+		}
+		if err := ui.ManageProfiles(store, ready); err != nil {
+			return err
+		}
 	}
 
-	// Ask for the source connections when needed, test them by listing databases, and on
-	// failure offer to re-enter them instead of exiting.
+	src, dst, err := pickEndpoints(store, scripted)
+	if err != nil {
+		return err
+	}
+	if err := guard(src, dst, ready); err != nil {
+		return err
+	}
+
+	// List the databases on both sides; when a profile does not work, offer to fix it.
 	var available []clone.Job
-	var local map[string]bool
+	var existing map[string]bool
 	for {
-		if needSetup {
-			if err := ui.Onboard(ready); err != nil {
-				return err
-			}
-		}
-		available, local, err = discover(ctx, ready)
+		available, existing, err = discover(ctx, ready, src, dst)
 		if err == nil {
 			break
 		}
-		if scripted {
+		var epErr *endpointError
+		if scripted || !errors.As(err, &epErr) || epErr.name == driver.LocalName {
 			return err
 		}
 		ui.PrintError(err)
-		again, cerr := ui.Confirm("Could not use the source connections. Enter them again?", "", "Re-enter", "Quit")
-		if cerr != nil {
-			return cerr
-		}
-		if !again {
-			return err
-		}
-		needSetup = true
-	}
-	if needSetup {
-		save, err := ui.Confirm("Source connections work. Save them to "+*envFile+" for next time?",
-			"The file holds passwords and is created with mode 0600", "Save", "Skip")
-		if err != nil {
-			return err
-		}
-		if save {
-			if err := config.Save(*envFile, drivers); err != nil {
-				return err
+		fix, cerr := ui.Confirm("Edit profile "+epErr.name+" and try again?", "", "Edit", "Quit")
+		if cerr != nil || !fix {
+			if cerr != nil {
+				return cerr
 			}
-			fmt.Println("saved " + *envFile)
+			return err
+		}
+		p, _ := store.Get(epErr.name)
+		if err := ui.EditProfile(ready, &p, store.Names()); err != nil {
+			return err
+		}
+		store.Put(epErr.name, p)
+		if err := store.Save(); err != nil {
+			return err
+		}
+		if src, err = store.Endpoint(endpointName(src, epErr.name, p.Name)); err != nil {
+			return err
+		}
+		if dst, err = store.Endpoint(endpointName(dst, epErr.name, p.Name)); err != nil {
+			return err
 		}
 	}
 
-	jobs, err := choose(ctx, available, local)
+	jobs, err := choose(ctx, src, dst, available, existing)
 	if err != nil || len(jobs) == 0 {
 		if err == nil {
 			fmt.Println("no database selected")
@@ -160,8 +182,8 @@ func run() error {
 	if err := os.MkdirAll(runDir, 0o755); err != nil {
 		return err
 	}
-	fmt.Printf("Cloning %d databases · pool %d streams · max %d streams/db · logs: %s\n\n",
-		len(jobs), *parallel, min(*workers, *parallel), runDir)
+	fmt.Printf("Cloning %d databases %s → %s · pool %d streams · max %d streams/db · logs: %s\n\n",
+		len(jobs), src.Name, dst.Name, *parallel, min(*workers, *parallel), runDir)
 
 	board := ui.NewBoard()
 	reps := make([]clone.Reporter, len(jobs))
@@ -169,7 +191,9 @@ func run() error {
 		reps[i] = board.Track(j.Label())
 	}
 	started := time.Now()
-	results := clone.Run(ctx, jobs, reps, clone.Options{Parallel: *parallel, Workers: *workers, Fresh: *fresh, LogDir: runDir})
+	results := clone.Run(ctx, jobs, reps, clone.Options{
+		Parallel: *parallel, Workers: *workers, Fresh: *fresh, LogDir: runDir, Source: src, Target: dst,
+	})
 	board.Wait()
 
 	var failed []string
@@ -189,6 +213,180 @@ func run() error {
 	}
 	return nil
 }
+
+func endpointName(ep driver.Endpoint, old, renamed string) string {
+	if ep.Name == old {
+		return renamed
+	}
+	return ep.Name
+}
+
+// pickEndpoints resolves -from / -to, asking for whatever is missing when interactive.
+func pickEndpoints(store *config.Store, scripted bool) (src, dst driver.Endpoint, err error) {
+	names := append(store.Names(), driver.LocalName)
+	srcName, dstName := *from, *to
+	if srcName == "" {
+		switch {
+		case scripted && len(store.Profiles) == 1:
+			srcName = store.Profiles[0].Name
+		case scripted:
+			return src, dst, errors.New("-from is required with -only/-all when there is not exactly one profile")
+		default:
+			if srcName, err = ui.SelectProfile("Clone FROM", names, names[0]); err != nil {
+				return src, dst, err
+			}
+		}
+	}
+	if dstName == "" {
+		dstName = driver.LocalName
+		if !scripted {
+			targets := slices.DeleteFunc(slices.Clone(names), func(n string) bool { return n == srcName })
+			if len(targets) == 0 {
+				return src, dst, errors.New("nothing to clone to yet; add a connection profile with -setup")
+			}
+			def := driver.LocalName
+			if srcName == driver.LocalName && len(targets) > 0 {
+				def = targets[0]
+			}
+			if dstName, err = ui.SelectProfile("Clone "+srcName+" TO", targets, def); err != nil {
+				return src, dst, err
+			}
+		}
+	}
+	if src, err = store.Endpoint(srcName); err != nil {
+		return src, dst, err
+	}
+	dst, err = store.Endpoint(dstName)
+	return src, dst, err
+}
+
+// guard refuses combinations that can destroy data by accident.
+func guard(src, dst driver.Endpoint, ds []driver.Driver) error {
+	if src.Name == dst.Name {
+		return fmt.Errorf("source and target are the same profile %q", src.Name)
+	}
+	for _, d := range ds {
+		if d.Configured(src) && d.Configured(dst) && d.Address(src) == d.Address(dst) {
+			return fmt.Errorf("%s: %q and %q point at the same server (%s); cloning it onto itself would overwrite the source",
+				d.Name(), src.Name, dst.Name, d.Address(src))
+		}
+	}
+	if !dst.Local && *fresh {
+		return fmt.Errorf("-fresh drops whole databases and is only allowed when the target is %q", driver.LocalName)
+	}
+	return nil
+}
+
+// endpointError names the profile whose connection failed, so it can be edited.
+type endpointError struct {
+	name string
+	err  error
+}
+
+func (e *endpointError) Error() string { return e.err.Error() }
+func (e *endpointError) Unwrap() error { return e.err }
+
+// discover lists the source databases of every engine both endpoints have, and which of
+// them already exist on the target.
+func discover(ctx context.Context, ds []driver.Driver, src, dst driver.Endpoint) ([]clone.Job, map[string]bool, error) {
+	var available []clone.Job
+	existing := map[string]bool{}
+	used := 0
+	for _, d := range ds {
+		if !d.Configured(src) || !d.Configured(dst) {
+			continue
+		}
+		used++
+		names, err := d.Databases(ctx, src)
+		if err != nil {
+			return nil, nil, &endpointError{src.Name, fmt.Errorf("cannot list %s databases on %s: %w", d.Name(), src.Name, err)}
+		}
+		for _, n := range names {
+			available = append(available, clone.Job{Driver: d, DB: n})
+		}
+		have, err := d.Databases(ctx, dst)
+		if err != nil {
+			return nil, nil, &endpointError{dst.Name, fmt.Errorf("cannot list %s databases on %s: %w", d.Name(), dst.Name, err)}
+		}
+		for _, n := range have {
+			existing[d.Name()+":"+n] = true
+		}
+	}
+	if used == 0 {
+		return nil, nil, fmt.Errorf("%s and %s have no engine in common", src.Name, dst.Name)
+	}
+	return available, existing, nil
+}
+
+// choose resolves -only / -all or shows the pickers, then confirms what will be written.
+// A non-local target always needs its name typed (or passed with -confirm); -yes does not
+// skip that.
+func choose(ctx context.Context, src, dst driver.Endpoint, available []clone.Job, existing map[string]bool) ([]clone.Job, error) {
+	var jobs []clone.Job
+	var err error
+	switch {
+	case *all:
+		jobs = available
+	case *only != "":
+		if jobs, err = parseOnly(*only, available); err != nil {
+			return nil, err
+		}
+	default:
+		if len(available) == 0 {
+			return nil, fmt.Errorf("%s has no database to clone", src.Name)
+		}
+		if jobs, err = ui.Pick(available, existing, dst.Name); err != nil {
+			return nil, err
+		}
+		if len(jobs) > 0 {
+			if jobs, err = ui.Narrow(ctx, src, jobs); err != nil {
+				return nil, err
+			}
+		}
+	}
+	if len(jobs) == 0 {
+		return nil, nil
+	}
+
+	var lines []string
+	for _, j := range jobs {
+		switch {
+		case !existing[j.String()]:
+			lines = append(lines, j.Label()+" — new on "+dst.Name)
+		case len(j.Only) > 0:
+			lines = append(lines, j.Label()+" — the selected objects are replaced, the rest is kept")
+		case *fresh:
+			lines = append(lines, j.String()+" — DROPPED and recreated (-fresh)")
+		default:
+			lines = append(lines, j.String()+" — objects with the same name are replaced")
+		}
+	}
+	summary := strings.Join(lines, "\n")
+
+	if !dst.Local {
+		switch {
+		case *confirm == dst.Name:
+			return jobs, nil
+		case *confirm != "":
+			return nil, fmt.Errorf("-confirm %q does not match the target %q", *confirm, dst.Name)
+		case scriptedRun():
+			return nil, fmt.Errorf("writing to %q needs -confirm %s", dst.Name, dst.Name)
+		}
+		return jobs, ui.ConfirmTarget(dst.Name, summary)
+	}
+	if slices.ContainsFunc(jobs, func(j clone.Job) bool { return existing[j.String()] }) && !*yes {
+		ok, err := ui.Confirm("Clone into "+dst.Name+":", summary, "Overwrite", "Cancel")
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			return nil, huh.ErrUserAborted
+		}
+	}
+	return jobs, nil
+}
+
+func scriptedRun() bool { return *only != "" || *all }
 
 // parseOnly turns "engine:db" and "engine:db.table" entries into jobs. Entries for the
 // same database merge; a bare "engine:db" anywhere means the whole database.
@@ -218,86 +416,6 @@ func parseOnly(spec string, available []clone.Job) ([]clone.Job, error) {
 	for k := range jobs {
 		if whole[jobs[k].String()] {
 			jobs[k].Only = nil
-		}
-	}
-	return jobs, nil
-}
-
-// discover lists source databases per configured driver, and which already exist locally.
-func discover(ctx context.Context, ds []driver.Driver) ([]clone.Job, map[string]bool, error) {
-	var available []clone.Job
-	local := map[string]bool{}
-	used := 0
-	for _, d := range ds {
-		if !d.Configured() {
-			continue
-		}
-		used++
-		names, err := d.ListSource(ctx)
-		if err != nil {
-			return nil, nil, fmt.Errorf("cannot list %s databases on the source: %w", d.Name(), err)
-		}
-		for _, n := range names {
-			available = append(available, clone.Job{Driver: d, DB: n})
-		}
-		existing, err := d.ListLocal(ctx)
-		if err != nil {
-			return nil, nil, fmt.Errorf("cannot list local %s databases: %w", d.Name(), err)
-		}
-		for _, n := range existing {
-			local[d.Name()+":"+n] = true
-		}
-	}
-	if used == 0 {
-		return nil, nil, errors.New("no source connection entered for any engine")
-	}
-	return available, local, nil
-}
-
-// choose resolves -only or shows the picker, then confirms overwriting local databases.
-func choose(ctx context.Context, available []clone.Job, local map[string]bool) ([]clone.Job, error) {
-	var jobs []clone.Job
-	var err error
-	switch {
-	case *all:
-		jobs = available
-	case *only != "":
-		if jobs, err = parseOnly(*only, available); err != nil {
-			return nil, err
-		}
-	default:
-		if len(available) == 0 {
-			return nil, errors.New("staging has no database to clone")
-		}
-		if jobs, err = ui.Pick(available, local); err != nil {
-			return nil, err
-		}
-		if len(jobs) > 0 {
-			if jobs, err = ui.Narrow(ctx, jobs); err != nil {
-				return nil, err
-			}
-		}
-	}
-
-	var overwrite []string
-	for _, j := range jobs {
-		switch {
-		case !local[j.String()]:
-		case len(j.Only) > 0:
-			overwrite = append(overwrite, j.Label()+" — the selected objects are replaced, the rest is kept")
-		case *fresh:
-			overwrite = append(overwrite, j.String()+" — DROPPED and recreated (-fresh)")
-		default:
-			overwrite = append(overwrite, j.String()+" — objects with the same name are replaced")
-		}
-	}
-	if len(overwrite) > 0 && !*yes {
-		ok, err := ui.Confirm("These already exist locally:", strings.Join(overwrite, "\n"), "Overwrite", "Cancel")
-		if err != nil {
-			return nil, err
-		}
-		if !ok {
-			return nil, huh.ErrUserAborted
 		}
 	}
 	return jobs, nil

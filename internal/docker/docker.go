@@ -40,12 +40,8 @@ var credentials = regexp.MustCompile(`([a-zA-Z][a-zA-Z0-9+.-]*://)[^/\s]+@`)
 // Redact masks credentials in connection strings found in s.
 func Redact(s string) string { return credentials.ReplaceAllString(s, "${1}***@") }
 
-// Lines runs cmd and returns its non-empty stdout lines minus those in skip, sorted.
-func Lines(cmd *exec.Cmd, skip ...string) ([]string, error) {
-	out, err := Output(cmd)
-	if err != nil {
-		return nil, err
-	}
+// SplitLines returns the non-empty lines of out minus those in skip, sorted.
+func SplitLines(out string, skip ...string) []string {
 	var lines []string
 	for _, l := range strings.Split(out, "\n") {
 		if l = strings.TrimSpace(l); l != "" && !slices.Contains(skip, l) {
@@ -53,7 +49,7 @@ func Lines(cmd *exec.Cmd, skip ...string) ([]string, error) {
 		}
 	}
 	slices.Sort(lines)
-	return lines, nil
+	return lines
 }
 
 // Output runs cmd and returns trimmed stdout; stderr is folded into the error.

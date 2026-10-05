@@ -1,6 +1,7 @@
 // Package mysql is the MySQL driver. mysqldump is single-threaded, so the driver gets its
 // parallelism by splitting the tables of a database into groups and running one
-// `mysqldump <tables> | mysql` pipe per group, balanced by table size.
+// `mysqldump <tables> | mysql` pipe per group, balanced by table size. Both tools run
+// inside the local mysql container towards any pair of endpoints.
 package mysql
 
 import (
@@ -8,7 +9,6 @@ import (
 	"cmp"
 	"context"
 	"fmt"
-	"os"
 	"os/exec"
 	"regexp"
 	"slices"
@@ -20,32 +20,27 @@ import (
 )
 
 const (
-	keyHost     = "STG_MYSQL_HOST"
-	keyPort     = "STG_MYSQL_PORT"
-	keyUser     = "STG_MYSQL_USER"
-	keyPassword = "STG_MYSQL_PASSWORD"
+	keyHost     = "mysql.host"
+	keyPort     = "mysql.port"
+	keyUser     = "mysql.user"
+	keyPassword = "mysql.password"
 
-	// MYSQL_PWD keeps the password off argv inside the container too.
-	source = `MYSQL_PWD="$STG_MYSQL_PASSWORD" `
-	conn   = `-h"$STG_MYSQL_HOST" -P"$STG_MYSQL_PORT" -u"$STG_MYSQL_USER"`
-	// The local container already carries MYSQL_ROOT_PASSWORD from docker-compose.
-	local = `MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql -uroot`
-
-	scriptQuerySource = source + `mysql ` + conn + ` -N -B -e "$SQL"`
-	scriptQueryLocal  = local + ` -N -B -e "$SQL"`
-
-	dumpBase = source + `mysqldump ` + conn +
-		` --single-transaction --quick --set-gtid-purged=OFF --no-tablespaces --column-statistics=0`
+	dumpFlags = ` --single-transaction --quick --set-gtid-purged=OFF --no-tablespaces --column-statistics=0`
 	// $TABLES is a space-separated list of names validated against safeName, so the
 	// unquoted expansion splits exactly on table boundaries.
-	scriptDumpTables = dumpBase + ` --skip-routines --skip-events --triggers "$DB" $TABLES`
+	dumpTables = dumpFlags + ` --skip-routines --skip-events --skip-triggers "$DB" $TABLES`
+	// Triggers come after the data: creating one can be refused on a target with binary
+	// logging (needs SUPER or log_bin_trust_function_creators), and that must not cost the data.
+	dumpTriggers = dumpFlags + ` --no-data --no-create-info --triggers --skip-routines --skip-events "$DB" $TABLES`
 	// Views reference tables, so they are dumped after every table group has landed.
-	scriptDumpViews = dumpBase + ` --no-data --skip-triggers --skip-routines --skip-events "$DB" $TABLES`
-	// $EVENTS is --events or --skip-events, depending on the staging user's EVENT privilege.
-	scriptDumpCode = dumpBase + ` --no-data --no-create-info --skip-triggers --routines $EVENTS "$DB"`
-	// Binary logging off for the import session: the local server does not replicate and
-	// writing every row twice roughly halves import speed.
-	scriptRestore = local + ` --init-command="SET SESSION sql_log_bin=0" "$DB"`
+	dumpViews = dumpFlags + ` --no-data --skip-triggers --skip-routines --skip-events "$DB" $TABLES`
+	// $EVENTS is --events or --skip-events, depending on the source user's EVENT privilege.
+	dumpCode = dumpFlags + ` --no-data --no-create-info --skip-triggers --routines $EVENTS "$DB"`
+
+	// A remote target user is usually not allowed to create objects owned by someone
+	// else, so DEFINER clauses are stripped from view, routine and trigger definitions
+	// (lines starting with /*! or CREATE; data lines start with INSERT).
+	stripDefiner = "sed -E '/^(\\/\\*!|CREATE)/ s/ ?DEFINER=`[^`]*`@`[^`]*`//g' | "
 )
 
 var (
@@ -62,16 +57,25 @@ func (*Driver) Name() string { return "mysql" }
 
 func (*Driver) Fields() []driver.Field {
 	return []driver.Field{
-		{Key: keyHost, Title: "Host", Description: "Leave empty to skip MySQL"},
-		{Key: keyPort, Title: "Port", Default: "3306"},
-		{Key: keyUser, Title: "User"},
-		{Key: keyPassword, Title: "Password", Secret: true},
+		{Key: keyHost, Title: "MySQL host", Description: "Leave empty if this profile has no MySQL"},
+		{Key: keyPort, Title: "MySQL port", Default: "3306"},
+		{Key: keyUser, Title: "MySQL user"},
+		{Key: keyPassword, Title: "MySQL password", Secret: true},
 	}
 }
 
-func (*Driver) Configured() bool {
-	return os.Getenv(keyHost) != "" && os.Getenv(keyUser) != ""
+func (*Driver) Configured(ep driver.Endpoint) bool {
+	return ep.Local || (ep.Get(keyHost) != "" && ep.Get(keyUser) != "")
 }
+
+func (*Driver) Address(ep driver.Endpoint) string {
+	if ep.Local {
+		return driver.LocalName
+	}
+	return strings.ToLower(ep.Get(keyHost)) + ":" + port(ep)
+}
+
+func port(ep driver.Endpoint) string { return cmp.Or(ep.Get(keyPort), "3306") }
 
 func container() string { return driver.Env("DBCLONE_MYSQL_CONTAINER", "mysql") }
 
@@ -79,60 +83,75 @@ func (*Driver) Local() driver.Local {
 	return driver.Local{
 		Container:    container(),
 		ContainerEnv: "DBCLONE_MYSQL_CONTAINER",
-		Tools:        []string{"mysql", "mysqldump"},
+		Tools:        []string{"mysql", "mysqldump", "sed"},
 		Credentials:  []string{"MYSQL_ROOT_PASSWORD"},
 		RunExample: "docker run -d --name " + container() + " -p 3306:3306 " +
 			"-e MYSQL_ROOT_PASSWORD=<password> mysql:8.4",
 	}
 }
 
-func sh(ctx context.Context, script string, stdin bool, vars map[string]string) *exec.Cmd {
-	env := map[string]string{
-		keyHost:     os.Getenv(keyHost),
-		keyPort:     driver.Env(keyPort, "3306"),
-		keyUser:     os.Getenv(keyUser),
-		keyPassword: os.Getenv(keyPassword),
-		"DB":        "",
-		"SQL":       "",
-		"TABLES":    "",
-		"EVENTS":    "",
+// conn returns the prefix that makes a client reach ep — password via MYSQL_PWD so it
+// never sits on argv — and the env vars it reads, named after prefix (e.g. SRC_HOST).
+// The local endpoint logs in as root with the password the container was created with.
+func conn(ep driver.Endpoint, prefix string) (pwd, args string, env map[string]string) {
+	if ep.Local {
+		return `MYSQL_PWD="$MYSQL_ROOT_PASSWORD" `, ` -uroot`, nil
 	}
-	for k, v := range vars {
-		env[k] = v
+	return `MYSQL_PWD="$` + prefix + `_PASSWORD" `,
+		` -h"$` + prefix + `_HOST" -P"$` + prefix + `_PORT" -u"$` + prefix + `_USER"`,
+		map[string]string{
+			prefix + "_HOST":     ep.Get(keyHost),
+			prefix + "_PORT":     port(ep),
+			prefix + "_USER":     ep.Get(keyUser),
+			prefix + "_PASSWORD": ep.Get(keyPassword),
+		}
+}
+
+func sh(ctx context.Context, script string, stdin bool, env ...map[string]string) *exec.Cmd {
+	all := map[string]string{}
+	for _, m := range env {
+		for k, v := range m {
+			all[k] = v
+		}
 	}
-	return docker.Sh(ctx, container(), script, stdin, env)
+	return docker.Sh(ctx, container(), script, stdin, all)
 }
 
-func (*Driver) ListSource(ctx context.Context) ([]string, error) {
-	return docker.Lines(sh(ctx, scriptQuerySource, false, map[string]string{"SQL": "SHOW DATABASES"}), systemDBs...)
+// query runs one SQL statement on ep and returns its tab-separated rows.
+func query(ctx context.Context, ep driver.Endpoint, sql string) (string, error) {
+	pwd, args, env := conn(ep, "EP")
+	return docker.Output(sh(ctx, pwd+`mysql`+args+` -N -B -e "$SQL"`, false, env, map[string]string{"SQL": sql}))
 }
 
-func (*Driver) ListLocal(ctx context.Context) ([]string, error) {
-	return docker.Lines(sh(ctx, scriptQueryLocal, false, map[string]string{"SQL": "SHOW DATABASES"}), systemDBs...)
+func (*Driver) Databases(ctx context.Context, ep driver.Endpoint) ([]string, error) {
+	out, err := query(ctx, ep, "SHOW DATABASES")
+	if err != nil {
+		return nil, err
+	}
+	return docker.SplitLines(out, systemDBs...), nil
 }
 
-func (*Driver) Prepare(ctx context.Context, db string, fresh bool) error {
-	sql := "CREATE DATABASE IF NOT EXISTS `" + db + "`"
+// Prepare creates the database only when it is missing — a remote target user may lack the
+// CREATE privilege on a database that already exists. db was validated by the engine.
+func (*Driver) Prepare(ctx context.Context, dst driver.Endpoint, db string, fresh bool) error {
 	if fresh {
-		sql = "DROP DATABASE IF EXISTS `" + db + "`; " + sql
+		if _, err := query(ctx, dst, "DROP DATABASE IF EXISTS `"+db+"`"); err != nil {
+			return err
+		}
 	}
-	_, err := docker.Output(sh(ctx, scriptQueryLocal, false, map[string]string{"SQL": sql}))
+	n, err := query(ctx, dst, fmt.Sprintf("SELECT COUNT(*) FROM information_schema.SCHEMATA WHERE SCHEMA_NAME='%s'", db))
+	if err != nil || n != "0" {
+		return err
+	}
+	_, err = query(ctx, dst, "CREATE DATABASE `"+db+"`")
 	return err
 }
 
-type table struct {
-	name string
-	size int64
-}
-
-// Plan: phase 1 = base tables in up to `workers` size-balanced groups, phase 2 = views
-// plus routines/events. Each group is its own --single-transaction, so groups are not one
-// snapshot of each other — fine for a dev copy, not for a backup.
-func (*Driver) Objects(ctx context.Context, db string) ([]driver.Object, error) {
+func (*Driver) Objects(ctx context.Context, ep driver.Endpoint, db string) ([]driver.Object, error) {
 	// data_length is InnoDB pages, not SQL text, so the sizes are only a scheduling and
 	// progress guide. db was validated by the engine before reaching here.
-	out, err := docker.Output(sh(ctx, scriptQuerySource, false, map[string]string{"SQL": fmt.Sprintf(
-		"SELECT TABLE_NAME, TABLE_TYPE, COALESCE(DATA_LENGTH,0) FROM information_schema.TABLES WHERE TABLE_SCHEMA='%s'", db)}))
+	out, err := query(ctx, ep, fmt.Sprintf(
+		"SELECT TABLE_NAME, TABLE_TYPE, COALESCE(DATA_LENGTH,0) FROM information_schema.TABLES WHERE TABLE_SCHEMA='%s'", db))
 	if err != nil {
 		return nil, err
 	}
@@ -152,12 +171,17 @@ func (*Driver) Objects(ctx context.Context, db string) ([]driver.Object, error) 
 	return objs, nil
 }
 
+type table struct {
+	name string
+	size int64
+}
+
 // Plan: phase 1 = the selected base tables in up to `workers` size-balanced groups,
 // phase 2 = the selected views, plus routines/events when the whole database is cloned.
 // Each group is its own --single-transaction, so groups are not one snapshot of each
 // other — fine for a dev copy, not for a backup.
-func (d *Driver) Plan(ctx context.Context, db string, workers int, only []string) (driver.Plan, error) {
-	objs, err := d.Objects(ctx, db)
+func (d *Driver) Plan(ctx context.Context, src, dst driver.Endpoint, db string, workers int, only []string) (driver.Plan, error) {
+	objs, err := d.Objects(ctx, src, db)
 	if err != nil {
 		return driver.Plan{}, err
 	}
@@ -183,26 +207,63 @@ func (d *Driver) Plan(ctx context.Context, db string, workers int, only []string
 		total += o.Size
 	}
 
+	p := pipe{src: src, dst: dst, db: db}
 	var phase1 []driver.Stream
 	for _, g := range balance(tables, workers) {
-		phase1 = append(phase1, stream(scriptDumpTables, map[string]string{"DB": db, "TABLES": strings.Join(g.names, " ")}, g.size, label(g.names)))
+		phase1 = append(phase1, p.stream(dumpTables, map[string]string{"TABLES": strings.Join(g.names, " ")}, g.size, label(g.names)))
 	}
 	var phase2 []driver.Stream
 	var warnings []string
 	if len(only) == 0 {
-		// SHOW EVENTS needs the EVENT privilege, which read-only staging users often lack;
-		// without it mysqldump --events aborts the whole dump, so skip events and say so.
+		// SHOW EVENTS needs the EVENT privilege, which read-only users often lack; without
+		// it mysqldump --events aborts the whole dump, so skip events and say so.
 		events, codeLabel := "--events", "routines/events"
-		if _, err := docker.Output(sh(ctx, scriptQuerySource, false, map[string]string{"SQL": "SHOW EVENTS FROM `" + db + "`"})); err != nil {
+		if _, err := query(ctx, src, "SHOW EVENTS FROM `"+db+"`"); err != nil {
 			events, codeLabel = "--skip-events", "routines"
-			warnings = append(warnings, "events skipped: staging user cannot SHOW EVENTS ("+firstLine(err.Error())+")")
+			warnings = append(warnings, "events skipped: source user cannot SHOW EVENTS ("+firstLine(err.Error())+")")
 		}
-		phase2 = append(phase2, stream(scriptDumpCode, map[string]string{"DB": db, "EVENTS": events}, 0, codeLabel))
+		phase2 = append(phase2, p.stream(dumpCode, map[string]string{"EVENTS": events}, 0, codeLabel))
+	}
+	if len(tables) > 0 {
+		names := make([]string, len(tables))
+		for i, t := range tables {
+			names[i] = t.name
+		}
+		phase2 = append(phase2, p.stream(dumpTriggers, map[string]string{"TABLES": strings.Join(names, " ")}, 0, "triggers"))
 	}
 	if len(views) > 0 {
-		phase2 = append(phase2, stream(scriptDumpViews, map[string]string{"DB": db, "TABLES": strings.Join(views, " ")}, 0, "views"))
+		phase2 = append(phase2, p.stream(dumpViews, map[string]string{"TABLES": strings.Join(views, " ")}, 0, "views"))
 	}
 	return driver.Plan{Estimate: total, Phases: [][]driver.Stream{phase1, phase2}, Warnings: warnings}, nil
+}
+
+type pipe struct {
+	src, dst driver.Endpoint
+	db       string
+}
+
+// stream pipes `mysqldump <dumpArgs>` from src into `mysql` on dst.
+func (p pipe) stream(dumpArgs string, vars map[string]string, size int64, lbl string) driver.Stream {
+	srcPwd, srcArgs, srcEnv := conn(p.src, "SRC")
+	dstPwd, dstArgs, dstEnv := conn(p.dst, "DST")
+	vars["DB"] = p.db
+	var restore string
+	if p.dst.Local {
+		// Binary logging off for the import session: the local server does not replicate
+		// and writing every row twice roughly halves import speed. Needs root, so local only.
+		restore = dstPwd + `mysql` + dstArgs + ` --init-command="SET SESSION sql_log_bin=0" "$DB"`
+	} else {
+		restore = stripDefiner + dstPwd + `mysql` + dstArgs + ` "$DB"`
+	}
+	return driver.Stream{
+		Label:  lbl,
+		Size:   size,
+		Weight: 1,
+		Dump: func(ctx context.Context) *exec.Cmd {
+			return sh(ctx, srcPwd+`mysqldump`+srcArgs+dumpArgs, false, srcEnv, vars)
+		},
+		Restore: func(ctx context.Context) *exec.Cmd { return sh(ctx, restore, true, dstEnv, vars) },
+	}
 }
 
 type group struct {
@@ -230,16 +291,6 @@ func balance(tables []table, n int) []group {
 	return groups
 }
 
-func stream(dump string, vars map[string]string, size int64, lbl string) driver.Stream {
-	return driver.Stream{
-		Label:   lbl,
-		Size:    size,
-		Weight:  1,
-		Dump:    func(ctx context.Context) *exec.Cmd { return sh(ctx, dump, false, vars) },
-		Restore: func(ctx context.Context) *exec.Cmd { return sh(ctx, scriptRestore, true, vars) },
-	}
-}
-
 func label(names []string) string {
 	if len(names) == 1 {
 		return names[0]
@@ -259,6 +310,12 @@ func (*Driver) StageFromStream(chunk []byte) string {
 }
 
 func (*Driver) StageFromLog(string) string { return "" }
+
+// permanent matches client errors no retry can fix: access denied (1044, 1045, 1142, 1227),
+// unknown database (1049) and routine/trigger creation refused under binary logging (1419).
+var permanent = regexp.MustCompile(`^ERROR (1044|1045|1049|1142|1227|1419) `)
+
+func (*Driver) Permanent(line string) bool { return permanent.MatchString(line) }
 
 func firstLine(s string) string {
 	s, _, _ = strings.Cut(strings.TrimSpace(s), "\n")

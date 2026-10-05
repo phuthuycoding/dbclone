@@ -10,9 +10,9 @@ import (
 	"os/exec"
 )
 
-// Field is one staging connection setting the user is asked for during onboarding.
+// Field is one connection setting of a profile, e.g. "mysql.host".
 type Field struct {
-	Key         string // env var name, e.g. STG_MYSQL_HOST
+	Key         string // key in Endpoint.Values, namespaced by engine
 	Title       string
 	Description string
 	Placeholder string
@@ -20,8 +20,23 @@ type Field struct {
 	Secret      bool
 }
 
+// LocalName is the built-in endpoint for the local container.
+const LocalName = "local"
+
+// Endpoint is one side of a clone: the local container, or a remote connection made of a
+// profile's settings.
+type Endpoint struct {
+	Name   string
+	Local  bool              // the local container; credentials come from its environment
+	Values map[string]string // remote settings, keyed by Field.Key
+}
+
+// Get returns a setting of a remote endpoint.
+func (e Endpoint) Get(key string) string { return e.Values[key] }
+
 // Local is what a driver needs on this machine: a running container of the engine's
-// official image that carries its root credentials and the dump/restore tools.
+// official image. Its tools run every dump and restore — towards remote endpoints too —
+// and its root credentials are used for the local endpoint.
 type Local struct {
 	Container    string   // container name in use
 	ContainerEnv string   // env var that overrides the container name
@@ -34,7 +49,7 @@ type Local struct {
 type Object struct {
 	Name string
 	Kind string // "table", "view", "collection"
-	Size int64  // bytes on staging, 0 when unknown
+	Size int64  // bytes on the source, 0 when unknown
 }
 
 // Stream is one dump → restore pipe. The engine runs it in a slot of the global pool and
@@ -54,39 +69,42 @@ type Plan struct {
 	Estimate int64
 	Phases   [][]Stream
 	// Warnings are things the clone will skip but that do not fail it, e.g. objects the
-	// staging user has no privilege to read.
+	// source user has no privilege to read.
 	Warnings []string
 }
 
 type Driver interface {
 	// Name is the short engine id shown to the user and used in `engine:db`.
 	Name() string
-	// Fields lists the staging settings this driver reads from the environment.
+	// Fields lists the connection settings a remote profile holds for this engine.
 	Fields() []Field
-	// Configured reports whether enough settings are present to use the driver.
-	Configured() bool
-	// Local describes the local container the driver restores into.
+	// Configured reports whether ep can be used with this engine. The local endpoint
+	// always can.
+	Configured(ep Endpoint) bool
+	// Address identifies the server ep points at, to refuse cloning a server onto itself.
+	Address(ep Endpoint) string
+	// Local describes the local container whose tools run every dump and restore.
 	Local() Local
 
-	// ListSource / ListLocal return user databases (system ones excluded).
-	ListSource(ctx context.Context) ([]string, error)
-	ListLocal(ctx context.Context) ([]string, error)
-
-	// Objects lists the tables / collections of db on staging, for picking a subset.
-	Objects(ctx context.Context, db string) ([]Object, error)
-	// Plan splits db into streams using at most workers parallel streams per phase. only
-	// restricts the clone to those objects; empty means the whole database, including
-	// database-level objects such as routines and events.
-	Plan(ctx context.Context, db string, workers int, only []string) (Plan, error)
-	// Prepare runs before the first phase on the local side, e.g. CREATE DATABASE IF NOT
-	// EXISTS. With fresh it first drops the local database, so nothing that exists only
-	// locally survives and local ends up identical to staging.
-	Prepare(ctx context.Context, db string, fresh bool) error
+	// Databases lists the user databases on ep (system ones excluded).
+	Databases(ctx context.Context, ep Endpoint) ([]string, error)
+	// Objects lists the tables / collections of db on ep, for picking a subset.
+	Objects(ctx context.Context, ep Endpoint, db string) ([]Object, error)
+	// Plan splits db into streams from src to dst using at most workers parallel streams
+	// per phase. only restricts the clone to those objects; empty means the whole
+	// database, including database-level objects such as routines and events.
+	Plan(ctx context.Context, src, dst Endpoint, db string, workers int, only []string) (Plan, error)
+	// Prepare runs on dst before the first phase, e.g. creating the database when it is
+	// missing. With fresh it first drops the database, so dst ends up identical to src.
+	Prepare(ctx context.Context, dst Endpoint, db string, fresh bool) error
 
 	// StageFromStream / StageFromLog extract the collection or table currently in flight
 	// from a chunk of the dump stream or a line of tool output; "" when there is none.
 	StageFromStream(chunk []byte) string
 	StageFromLog(line string) string
+	// Permanent reports whether a line of tool output is an error that retrying cannot
+	// fix (e.g. access denied), so the engine fails the stream at once.
+	Permanent(line string) bool
 }
 
 // Select returns the set of object names to clone: every object when only is empty,
@@ -105,7 +123,7 @@ func Select(objs []Object, only []string) (map[string]bool, error) {
 	}
 	for _, n := range only {
 		if !exists[n] {
-			return nil, fmt.Errorf("%q not found on staging", n)
+			return nil, fmt.Errorf("%q not found on the source", n)
 		}
 		set[n] = true
 	}
