@@ -1,0 +1,510 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dbclone — Clone MongoDB &amp; MySQL from staging to local Docker</title>
+<meta name="description" content="dbclone is a free, open-source CLI that clones MongoDB and MySQL databases — or just the tables you pick — from staging into local Docker containers, in parallel, with retries and live progress.">
+<meta name="keywords" content="clone mongodb database, copy mysql database to local, mongodump mongorestore, mysqldump, staging to local, docker database, database clone cli, golang cli, dev data">
+<link rel="canonical" href="https://phuthuycoding.github.io/dbclone/">
+<meta name="theme-color" content="#0b0f14">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="dbclone">
+<meta property="og:title" content="dbclone — Clone MongoDB & MySQL from staging to local Docker">
+<meta property="og:description" content="Pick databases or single tables, stream them into your local containers in parallel, with retries and live progress. Open source, MIT.">
+<meta property="og:url" content="https://phuthuycoding.github.io/dbclone/">
+<meta property="og:image" content="https://phuthuycoding.github.io/dbclone/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="dbclone — Clone MongoDB & MySQL from staging to local Docker">
+<meta name="twitter:description" content="Pick databases or single tables, stream them into your local containers in parallel, with retries and live progress.">
+<meta name="twitter:image" content="https://phuthuycoding.github.io/dbclone/og.png">
+
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "dbclone",
+  "description": "CLI that clones MongoDB and MySQL databases, or selected tables and collections, from a staging server into local Docker containers with parallel streaming, retries and live progress.",
+  "applicationCategory": "DeveloperApplication",
+  "operatingSystem": "Linux, macOS, Windows",
+  "softwareVersion": "0.1.1",
+  "license": "https://opensource.org/licenses/MIT",
+  "url": "https://phuthuycoding.github.io/dbclone/",
+  "downloadUrl": "https://github.com/phuthuycoding/dbclone/releases",
+  "codeRepository": "https://github.com/phuthuycoding/dbclone",
+  "programmingLanguage": "Go",
+  "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
+}
+</script>
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  "mainEntity": [
+    {"@type": "Question", "name": "Do I need mongodump or mysqldump installed?",
+     "acceptedAnswer": {"@type": "Answer", "text": "No. dbclone runs the dump and restore tools that already ship in the official mongo and mysql images, inside your local containers. You only need Docker."}},
+    {"@type": "Question", "name": "Can I clone only some tables or collections?",
+     "acceptedAnswer": {"@type": "Answer", "text": "Yes. After picking databases you can narrow any of them down to specific tables or collections, or pass them on the command line, e.g. dbclone -only mongo:shop.orders,mysql:app.users."}},
+    {"@type": "Question", "name": "What happens to data that already exists locally?",
+     "acceptedAnswer": {"@type": "Answer", "text": "Objects that exist on the source are dropped and recreated locally; objects that exist only locally are kept. With -fresh, a database cloned whole is dropped first so the local copy is identical to the source."}},
+    {"@type": "Question", "name": "Is dbclone a backup tool?",
+     "acceptedAnswer": {"@type": "Answer", "text": "No. It is built for development data. MySQL table groups are dumped in separate transactions, so a copy is not one consistent point in time across tables."}},
+    {"@type": "Question", "name": "What if the connection to staging drops during a copy?",
+     "acceptedAnswer": {"@type": "Answer", "text": "Every stream is retried up to three times with backoff, and restores drop-and-recreate, so a retry starts clean. Large MongoDB collections run as their own streams, so only the affected collection is copied again."}}
+  ]
+}
+</script>
+
+<style>
+:root {
+  --bg: #0b0f14;
+  --bg-2: #10161e;
+  --panel: #0f141b;
+  --line: #1e2732;
+  --text: #d7dee8;
+  --muted: #8b98a8;
+  --accent: #5eead4;
+  --accent-2: #a78bfa;
+  --ok: #4ade80;
+  --warn: #fbbf24;
+  --err: #f87171;
+  --mono: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+  --sans: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0; background: var(--bg); color: var(--text); font-family: var(--sans);
+  line-height: 1.6; -webkit-font-smoothing: antialiased; overflow-x: hidden;
+}
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+code, pre, .mono { font-family: var(--mono); }
+.wrap { max-width: 1120px; margin: 0 auto; padding: 0 20px; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* nav */
+nav { position: sticky; top: 0; z-index: 10; backdrop-filter: blur(10px); background: rgba(11,15,20,.75); border-bottom: 1px solid var(--line); }
+nav .wrap { display: flex; align-items: center; justify-content: space-between; height: 58px; }
+.brand { display: flex; align-items: center; gap: 10px; font-family: var(--mono); font-weight: 700; color: var(--text); }
+.brand:hover { text-decoration: none; }
+.brand .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 12px var(--accent); }
+nav ul { display: flex; gap: 22px; list-style: none; margin: 0; padding: 0; font-size: 14px; }
+nav ul a { color: var(--muted); }
+nav ul a:hover { color: var(--text); text-decoration: none; }
+@media (max-width: 640px) { nav ul li:not(:last-child) { display: none; } }
+
+/* hero */
+.hero { position: relative; padding: 84px 0 40px; text-align: center; }
+.hero::before {
+  content: ""; position: absolute; inset: -120px 0 auto; height: 520px; z-index: -1;
+  background: radial-gradient(600px 260px at 30% 30%, rgba(94,234,212,.16), transparent 70%),
+              radial-gradient(520px 240px at 75% 20%, rgba(167,139,250,.16), transparent 70%);
+}
+.pill { display: inline-flex; gap: 8px; align-items: center; padding: 5px 12px; border: 1px solid var(--line); border-radius: 999px; font-size: 13px; color: var(--muted); background: var(--bg-2); }
+.pill b { color: var(--accent); font-weight: 600; }
+h1 { font-size: clamp(34px, 6vw, 60px); line-height: 1.08; margin: 22px 0 14px; letter-spacing: -0.02em; }
+h1 .grad { background: linear-gradient(90deg, var(--accent), var(--accent-2)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.typed { font-family: var(--mono); font-size: clamp(16px, 2.6vw, 22px); color: var(--muted); min-height: 1.6em; }
+.typed .t { color: var(--text); }
+.caret { display: inline-block; width: .6ch; height: 1.15em; margin-left: 2px; background: var(--accent); vertical-align: text-bottom; animation: blink 1s steps(1) infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+.cta { display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; margin-top: 30px; }
+.install { display: flex; align-items: center; gap: 10px; max-width: 100%; padding: 11px 12px 11px 16px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; font-family: var(--mono); font-size: 14px; }
+.install code { overflow-x: auto; white-space: nowrap; }
+.install .p { color: var(--accent); user-select: none; }
+.btn { display: inline-flex; align-items: center; gap: 8px; padding: 11px 18px; border-radius: 10px; font-weight: 600; font-size: 15px; border: 1px solid var(--line); color: var(--text); background: var(--bg-2); cursor: pointer; }
+.btn:hover { text-decoration: none; border-color: #2c3a49; }
+.btn.primary { background: var(--accent); color: #062521; border-color: transparent; }
+.btn.primary:hover { filter: brightness(1.08); }
+.copy { padding: 6px 10px; font-size: 12px; border-radius: 7px; }
+
+/* terminal */
+.term-wrap { margin: 48px auto 0; max-width: 960px; }
+.term { background: #070a0e; border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 30px 80px -20px rgba(0,0,0,.7), 0 0 0 1px rgba(94,234,212,.05); overflow: hidden; text-align: left; }
+.term-bar { display: flex; align-items: center; gap: 8px; padding: 11px 14px; border-bottom: 1px solid var(--line); background: #0b1016; }
+.term-bar i { width: 12px; height: 12px; border-radius: 50%; display: inline-block; }
+.term-bar i:nth-child(1) { background: #ff5f57; } .term-bar i:nth-child(2) { background: #febc2e; } .term-bar i:nth-child(3) { background: #28c840; }
+.term-bar span { margin-left: 10px; font-size: 12px; color: var(--muted); font-family: var(--mono); }
+.screen { font-family: var(--mono); font-size: 13px; line-height: 1.55; padding: 16px 18px 20px; height: 430px; overflow: hidden; white-space: pre; color: #c9d3df; }
+@media (max-width: 720px) { .screen { font-size: 10.5px; height: 380px; padding: 12px; overflow-x: auto; } }
+.c-ok { color: var(--ok); } .c-err { color: var(--err); } .c-warn { color: var(--warn); } .c-dim { color: #627083; }
+.c-acc { color: var(--accent); } .c-vio { color: var(--accent-2); } .c-b { color: #fff; font-weight: 700; }
+.bar-fill { color: var(--accent); } .bar-rest { color: #2a3542; }
+
+/* sections */
+section { padding: 84px 0 0; }
+.kicker { font-family: var(--mono); color: var(--accent); font-size: 13px; letter-spacing: .08em; text-transform: uppercase; }
+h2 { font-size: clamp(26px, 3.6vw, 36px); margin: 8px 0 12px; letter-spacing: -0.01em; }
+.lead { color: var(--muted); max-width: 680px; margin: 0 0 34px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 16px; }
+.card { background: var(--bg-2); border: 1px solid var(--line); border-radius: 14px; padding: 22px; transition: transform .2s ease, border-color .2s ease; }
+.card:hover { transform: translateY(-3px); border-color: #2c3a49; }
+.card .ic { font-size: 22px; width: 42px; height: 42px; display: grid; place-items: center; border-radius: 10px; background: rgba(94,234,212,.08); border: 1px solid rgba(94,234,212,.2); margin-bottom: 14px; }
+.card h3 { margin: 0 0 6px; font-size: 17px; }
+.card p { margin: 0; color: var(--muted); font-size: 15px; }
+
+/* flow */
+.flow { display: grid; grid-template-columns: 1fr auto 1.6fr auto 1fr; align-items: center; gap: 14px; }
+.node { background: var(--bg-2); border: 1px solid var(--line); border-radius: 14px; padding: 18px; text-align: center; }
+.node small { display: block; color: var(--muted); font-size: 13px; }
+.node.box { border-style: dashed; border-color: #2c3a49; }
+.node .pipe { display: flex; align-items: center; justify-content: center; gap: 10px; margin-top: 8px; font-family: var(--mono); font-size: 13px; }
+.arrow { position: relative; width: 60px; height: 2px; background: linear-gradient(90deg, transparent, var(--accent)); }
+.arrow::after { content: ""; position: absolute; right: -2px; top: -4px; border: 5px solid transparent; border-left-color: var(--accent); }
+.packet { position: absolute; top: -3px; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 10px var(--accent); animation: flow 1.6s linear infinite; }
+@keyframes flow { from { left: 0; opacity: 0; } 20% { opacity: 1; } to { left: 100%; opacity: 0; } }
+@media (max-width: 820px) { .flow { grid-template-columns: 1fr; } .arrow { width: 2px; height: 34px; margin: 0 auto; background: linear-gradient(180deg, transparent, var(--accent)); } .arrow::after { right: -4px; top: auto; bottom: -8px; border-left-color: transparent; border-top-color: var(--accent); } .packet { left: -3px !important; animation-name: flowv; } @keyframes flowv { from { top: 0; opacity: 0; } 20% { opacity: 1; } to { top: 100%; opacity: 0; } } }
+
+/* steps / code */
+.steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; counter-reset: s; }
+.step { background: var(--bg-2); border: 1px solid var(--line); border-radius: 14px; padding: 20px; }
+.step h3 { margin: 0 0 10px; font-size: 16px; }
+.step h3::before { counter-increment: s; content: counter(s); display: inline-grid; place-items: center; width: 24px; height: 24px; margin-right: 10px; border-radius: 50%; background: var(--accent); color: #062521; font-size: 13px; }
+pre { margin: 0; background: #070a0e; border: 1px solid var(--line); border-radius: 10px; padding: 14px; overflow-x: auto; font-size: 13px; line-height: 1.6; }
+pre .cm { color: #627083; }
+
+table { width: 100%; border-collapse: collapse; font-size: 14.5px; }
+.table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 14px; }
+th, td { text-align: left; padding: 12px 16px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { background: var(--bg-2); color: var(--muted); font-weight: 600; font-size: 13px; }
+tr:last-child td { border-bottom: 0; }
+td code { color: var(--accent); }
+
+/* faq */
+details { background: var(--bg-2); border: 1px solid var(--line); border-radius: 12px; padding: 16px 20px; margin-bottom: 10px; }
+summary { cursor: pointer; font-weight: 600; list-style: none; }
+summary::-webkit-details-marker { display: none; }
+summary::after { content: "+"; float: right; color: var(--accent); font-family: var(--mono); }
+details[open] summary::after { content: "−"; }
+details p { color: var(--muted); margin: 10px 0 0; }
+
+footer { margin-top: 90px; padding: 34px 0; border-top: 1px solid var(--line); color: var(--muted); font-size: 14px; }
+footer .wrap { display: flex; flex-wrap: wrap; gap: 14px; justify-content: space-between; }
+
+.reveal { opacity: 0; transform: translateY(14px); transition: opacity .6s ease, transform .6s ease; }
+.reveal.in { opacity: 1; transform: none; }
+@media (prefers-reduced-motion: reduce) {
+  .reveal { opacity: 1; transform: none; transition: none; }
+  .caret, .packet { animation: none; }
+  .card { transition: none; }
+}
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="wrap">
+    <a class="brand" href="#top" aria-label="dbclone home"><span class="dot"></span>dbclone</a>
+    <ul>
+      <li><a href="#features">Features</a></li>
+      <li><a href="#how">How it works</a></li>
+      <li><a href="#start">Get started</a></li>
+      <li><a href="#faq">FAQ</a></li>
+      <li><a href="https://github.com/phuthuycoding/dbclone">GitHub</a></li>
+    </ul>
+  </div>
+</nav>
+
+<header class="hero" id="top">
+  <div class="wrap">
+    <span class="pill"><b id="ver">v0.1.1</b> · open source · MIT · Go</span>
+    <h1>Clone <span class="grad">MongoDB &amp; MySQL</span><br>from staging to local Docker</h1>
+    <p class="typed" aria-live="polite"><span class="sr-only">dbclone: </span><span class="t" id="typed">Pick databases or single tables.</span><span class="caret" aria-hidden="true"></span></p>
+    <div class="cta">
+      <div class="install">
+        <span class="p">$</span><code id="cmd">go install github.com/phuthuycoding/dbclone@latest</code>
+        <button class="btn copy" type="button" data-copy="#cmd">Copy</button>
+      </div>
+      <a class="btn primary" href="https://github.com/phuthuycoding/dbclone">★ Star on GitHub</a>
+      <a class="btn" href="https://github.com/phuthuycoding/dbclone/releases/latest">Download binaries</a>
+    </div>
+
+    <div class="term-wrap">
+      <div class="term">
+        <div class="term-bar"><i></i><i></i><i></i><span>~/project — dbclone</span></div>
+        <div class="screen" id="screen" aria-hidden="true"></div>
+        <p class="sr-only">Animated demo: dbclone checks Docker and the local mongodb and mysql containers, the user picks three databases, and three progress bars stream them in parallel, including one automatic retry, until all databases are done.</p>
+      </div>
+    </div>
+  </div>
+</header>
+
+<main>
+<section id="features">
+  <div class="wrap">
+    <div class="kicker reveal">Features</div>
+    <h2 class="reveal">Real data on your laptop, without the scripts</h2>
+    <p class="lead reveal">One command replaces the dump-copy-restore dance. dbclone picks the work apart, runs it in parallel and keeps you informed the whole way.</p>
+    <div class="grid">
+      <article class="card reveal"><div class="ic">🐳</div><h3>Nothing to install</h3><p>Runs mongodump, mongorestore, mysqldump and mysql inside your local official containers — client versions always match the server.</p></article>
+      <article class="card reveal"><div class="ic">⚡</div><h3>Parallel streaming</h3><p>One weighted pool shared by every database, biggest work first. Dumps pipe straight into restores — no dump files on disk.</p></article>
+      <article class="card reveal"><div class="ic">🎯</div><h3>Pick tables, not just databases</h3><p>Tick whole databases or narrow any of them to the tables and collections you need. Everything else stays untouched.</p></article>
+      <article class="card reveal"><div class="ic">🔁</div><h3>Survives flaky links</h3><p>Each stream retries three times with backoff. Big collections run on their own, so a drop only re-copies what was lost.</p></article>
+      <article class="card reveal"><div class="ic">📊</div><h3>Live progress</h3><p>A line per database: current table, active streams, percent, bytes, speed and time — plus a log file per database.</p></article>
+      <article class="card reveal"><div class="ic">🔒</div><h3>Secrets stay secret</h3><p>Passwords travel as environment variables, never on a command line, and every log line is scrubbed of credentials.</p></article>
+      <article class="card reveal"><div class="ic">🩺</div><h3>Guided setup</h3><p><code>dbclone -check</code> verifies Docker and your containers and prints the exact command to fix anything missing.</p></article>
+      <article class="card reveal"><div class="ic">🧩</div><h3>Pluggable engines</h3><p>MongoDB and MySQL today. Engines are adapters behind one interface — scheduling, retries and UI come for free.</p></article>
+    </div>
+  </div>
+</section>
+
+<section id="how">
+  <div class="wrap">
+    <div class="kicker reveal">How it works</div>
+    <h2 class="reveal">Straight from the source into your container</h2>
+    <p class="lead reveal">Every stream is a pipe that lives inside your local container. Data crosses the network once and never touches your disk as a dump file.</p>
+    <div class="flow reveal">
+      <div class="node"><b>Staging</b><small>MongoDB · MySQL</small></div>
+      <div class="arrow"><span class="packet"></span></div>
+      <div class="node box"><b>Local container</b><small>official mongo / mysql image</small>
+        <div class="pipe"><span class="c-acc">dump</span><span class="c-dim">──pipe──▶</span><span class="c-vio">restore</span></div></div>
+      <div class="arrow"><span class="packet" style="animation-delay:.8s"></span></div>
+      <div class="node"><b>localhost</b><small>your dev database</small></div>
+    </div>
+    <div class="grid" style="margin-top:22px">
+      <article class="card reveal"><h3>MongoDB</h3><p>Collections of 64&nbsp;MiB or more get their own stream; the rest, views included, share one more that copies several collections at once.</p></article>
+      <article class="card reveal"><h3>MySQL</h3><p>Tables are split into size-balanced groups, one stream each. Views, routines and events follow once the tables are in.</p></article>
+      <article class="card reveal"><h3>Scheduling</h3><p>Streams from all databases share <code>-j</code> slots and start biggest first, so a slot freed by a small database goes straight to a big one.</p></article>
+    </div>
+  </div>
+</section>
+
+<section id="start">
+  <div class="wrap">
+    <div class="kicker reveal">Get started</div>
+    <h2 class="reveal">Up and running in a minute</h2>
+    <p class="lead reveal">You need Docker with the official <code>mongo</code> and/or <code>mysql</code> images running locally. dbclone checks this for you.</p>
+    <div class="steps">
+      <div class="step reveal"><h3>Install</h3><pre><code>go install github.com/phuthuycoding/dbclone@latest
+<span class="cm"># or grab a binary for Linux, macOS, Windows</span>
+<span class="cm"># from GitHub Releases</span></code></pre></div>
+      <div class="step reveal"><h3>Check your setup</h3><pre><code>dbclone -check
+<span class="c-ok">✓</span> Docker  29.8.2
+<span class="c-ok">✓</span> mongo: local container "mongodb"  running
+<span class="c-ok">✓</span> mysql: local container "mysql"  running</code></pre></div>
+      <div class="step reveal"><h3>Clone</h3><pre><code>dbclone                     <span class="cm"># guided picker</span>
+dbclone -only mongo:shop.orders,mysql:app
+dbclone -all -fresh -j 3 -w 2  <span class="cm"># exact copy</span></code></pre></div>
+    </div>
+  </div>
+</section>
+
+<section id="flags">
+  <div class="wrap">
+    <div class="kicker reveal">Reference</div>
+    <h2 class="reveal">Flags</h2>
+    <div class="table-wrap reveal">
+      <table>
+        <thead><tr><th>Flag</th><th>Default</th><th>What it does</th></tr></thead>
+        <tbody>
+          <tr><td><code>-j</code></td><td>8</td><td>Global pool: concurrent dump→restore streams across all databases</td></tr>
+          <tr><td><code>-w</code></td><td>4</td><td>Max streams for one database</td></tr>
+          <tr><td><code>-only</code></td><td></td><td><code>engine:db</code> or <code>engine:db.object</code>, comma separated; skips the picker</td></tr>
+          <tr><td><code>-all</code></td><td>off</td><td>Clone every database on the source</td></tr>
+          <tr><td><code>-fresh</code></td><td>off</td><td>Drop each wholly-cloned local database first, for an identical copy</td></tr>
+          <tr><td><code>-yes</code></td><td>off</td><td>Do not ask before overwriting local databases</td></tr>
+          <tr><td><code>-check</code></td><td></td><td>Check Docker and the local containers, then exit</td></tr>
+          <tr><td><code>-setup</code></td><td>off</td><td>Re-enter the source connections</td></tr>
+          <tr><td><code>-env</code></td><td><code>.env.staging</code></td><td>Connection file (saved with mode 0600)</td></tr>
+          <tr><td><code>-logs</code></td><td><code>logs</code></td><td>Per-database tool output, one folder per run</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section id="faq">
+  <div class="wrap">
+    <div class="kicker reveal">FAQ</div>
+    <h2 class="reveal">Questions</h2>
+    <details class="reveal"><summary>Do I need mongodump or mysqldump installed?</summary><p>No. dbclone runs the dump and restore tools that already ship in the official <code>mongo</code> and <code>mysql</code> images, inside your local containers. You only need Docker.</p></details>
+    <details class="reveal"><summary>Can I clone only some tables or collections?</summary><p>Yes. After picking databases you can narrow any of them down to specific tables or collections, or pass them on the command line: <code>dbclone -only mongo:shop.orders,mysql:app.users</code>.</p></details>
+    <details class="reveal"><summary>What happens to data that already exists locally?</summary><p>Objects that exist on the source are dropped and recreated locally; objects that exist only locally are kept. With <code>-fresh</code>, a database cloned whole is dropped first so the local copy is identical to the source. dbclone lists everything it will overwrite and asks first.</p></details>
+    <details class="reveal"><summary>Is dbclone a backup tool?</summary><p>No — it is built for development data. MySQL table groups are dumped in separate transactions, so a copy is not one consistent point in time across tables.</p></details>
+    <details class="reveal"><summary>What if the connection to staging drops during a copy?</summary><p>Every stream is retried up to three times with backoff, and restores drop-and-recreate, so a retry starts clean. Large MongoDB collections run as their own streams, so only the affected collection is copied again. On a busy source, lower the load with <code>-j 3 -w 2</code>.</p></details>
+  </div>
+</section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>dbclone · MIT License · made by <a href="https://github.com/phuthuycoding">@phuthuycoding</a></span>
+    <span><a href="https://github.com/phuthuycoding/dbclone">GitHub</a> · <a href="https://github.com/phuthuycoding/dbclone/releases">Releases</a> · <a href="https://pkg.go.dev/github.com/phuthuycoding/dbclone">pkg.go.dev</a></span>
+  </div>
+</footer>
+
+<script>
+(() => {
+  const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+  // ---- copy button
+  document.querySelectorAll("[data-copy]").forEach(b => b.addEventListener("click", async () => {
+    try { await navigator.clipboard.writeText(document.querySelector(b.dataset.copy).textContent); b.textContent = "Copied"; }
+    catch { b.textContent = "Select & copy"; }
+    setTimeout(() => (b.textContent = "Copy"), 1600);
+  }));
+
+  // ---- latest version (falls back to the static text)
+  fetch("https://api.github.com/repos/phuthuycoding/dbclone/releases/latest")
+    .then(r => r.ok ? r.json() : null).then(j => { if (j && j.tag_name) document.getElementById("ver").textContent = j.tag_name; })
+    .catch(() => {});
+
+  // ---- scroll reveal
+  const io = new IntersectionObserver(es => es.forEach(e => { if (e.isIntersecting) { e.target.classList.add("in"); io.unobserve(e.target); } }), { threshold: .12 });
+  document.querySelectorAll(".reveal").forEach(el => reduce ? el.classList.add("in") : io.observe(el));
+
+  // ---- typewriter (type, pause, delete, next)
+  const phrases = [
+    "Clone staging MongoDB to localhost.",
+    "Copy only the MySQL tables you need.",
+    "Stream dumps in parallel — no dump files.",
+    "Retry flaky connections automatically.",
+    "Check your Docker setup with -check.",
+  ];
+  const typed = document.getElementById("typed");
+  async function typeLoop() {
+    if (reduce) { typed.textContent = phrases[0]; return; }
+    for (let i = 0; ; i = (i + 1) % phrases.length) {
+      const p = phrases[i];
+      for (let k = typed.textContent.length; k >= 0; k--) { typed.textContent = typed.textContent.slice(0, k); await sleep(18); }
+      for (let k = 1; k <= p.length; k++) { typed.textContent = p.slice(0, k); await sleep(38 + Math.random() * 45); }
+      await sleep(1900);
+    }
+  }
+  typed.textContent = "";
+  typeLoop();
+
+  // ---- terminal demo
+  const screen = document.getElementById("screen");
+  const esc = s => s.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+  const lines = [];
+  const render = () => { screen.innerHTML = lines.join("\n"); };
+  const push = l => { lines.push(l); render(); };
+  const set = (i, l) => { lines[i] = l; render(); };
+  const spin = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";
+  const fmt = b => b >= 1024 ? (b / 1024).toFixed(1) + " GiB" : b.toFixed(1) + " MiB";
+  const mmss = s => String(Math.floor(s / 60)).padStart(2, "0") + ":" + String(Math.floor(s % 60)).padStart(2, "0");
+  const pad = (s, n) => s + " ".repeat(Math.max(0, n - s.length));
+
+  async function typeCmd(text) {
+    const i = lines.length; push('<span class="c-acc">~/project</span> <span class="c-dim">$</span> ');
+    for (let k = 1; k <= text.length; k++) { set(i, '<span class="c-acc">~/project</span> <span class="c-dim">$</span> ' + esc(text.slice(0, k)) + '<span class="c-acc">▋</span>'); await sleep(45 + Math.random() * 50); }
+    set(i, '<span class="c-acc">~/project</span> <span class="c-dim">$</span> ' + esc(text)); await sleep(350);
+  }
+
+  const narrow = matchMedia("(max-width: 720px)").matches;
+  function bar(pct, w = narrow ? 10 : 24) {
+    const f = Math.round(pct / 100 * w);
+    return '<span class="c-dim">[</span><span class="bar-fill">' + "=".repeat(Math.max(0, f - 1)) + (f > 0 && f < w ? ">" : f >= w ? "=" : "") +
+      '</span><span class="bar-rest">' + "-".repeat(w - f) + '</span><span class="c-dim">]</span>';
+  }
+
+  async function demo() {
+    lines.length = 0; render();
+    await typeCmd("dbclone");
+    push("Checking local setup"); await sleep(250);
+    for (const l of ['Docker  <span class="c-dim">29.8.2</span>', 'mongo: local container "mongodb"  <span class="c-dim">running</span>', 'mysql: local container "mysql"  <span class="c-dim">running</span>']) {
+      push('  <span class="c-ok">✓</span> ' + l); await sleep(320);
+    }
+    push(""); await sleep(300);
+
+    const dbs = ["mongo:shop", "mongo:analytics", "mysql:app", "mysql:crm"];
+    const pick = new Set();
+    const head = lines.length;
+    push('<span class="c-vio">┃</span> <span class="c-b">Select databases to clone to local</span>');
+    push('<span class="c-vio">┃</span> <span class="c-dim">space: toggle · /: filter · enter: confirm</span>');
+    dbs.forEach(() => push(""));
+    const drawPick = cur => dbs.forEach((d, i) => set(head + 2 + i,
+      '<span class="c-vio">┃</span> ' + (i === cur ? '<span class="c-acc">&gt;</span>' : " ") + " " +
+      (pick.has(i) ? '<span class="c-ok">✓</span>' : '<span class="c-dim">•</span>') + " " + d +
+      (d === "mysql:app" ? '<span class="c-dim">  (exists locally)</span>' : "")));
+    for (const [cur, on] of [[0, 1], [1, 0], [2, 1], [3, 1]]) { drawPick(cur); await sleep(380); if (on) { pick.add(cur); drawPick(cur); await sleep(260); } }
+    await sleep(500);
+    lines.length = head; render();
+
+    push(narrow ? "Cloning 3 databases · pool 8 · max 4/db"
+      : 'Cloning 3 databases · pool 8 streams · max 4 streams/db · logs: <span class="c-dim">logs/20261005-101500</span>');
+    push("");
+    // Simulated clock: the demo plays in ~8 s but shows the numbers of a ~2 minute run.
+    const SIM = 15;
+    const rows = [
+      { name: "mongo:shop", total: 2900, dur: 105, streams: 2, stages: ["orders", "users", "carts", "events"], retryAt: 0.45 },
+      { name: "mysql:app", total: 820, dur: 34, streams: 3, stages: ["accounts +3", "invoices", "audit_log +5", "views"] },
+      { name: "mysql:crm", total: 260, dur: 16, streams: 3, stages: ["contacts +8", "deals", "routines"], after: 1 },
+    ];
+    const base = lines.length;
+    rows.forEach(r => { r.cur = 0; r.t = 0; r.state = "wait"; r.retry = 0; push(""); });
+    const draw = (r, i, tick) => {
+      let icon, stage, size, pct, speed = "", el = "";
+      if (r.state === "done") { icon = '<span class="c-ok">✓</span>'; stage = "done"; pct = "100%"; size = fmt(r.total); }
+      else if (r.state === "wait") { icon = '<span class="c-dim">·</span>'; stage = "waiting for slot"; pct = "  0%"; size = "0.0 MiB / ~" + fmt(r.total); }
+      else {
+        icon = '<span class="c-acc">' + spin[tick % spin.length] + "</span>";
+        stage = r.retry > 0 ? '<span class="c-warn">retry 2/3 orders</span>'
+          : r.stages[Math.min(r.stages.length - 1, Math.floor(r.cur / r.total * r.stages.length))] + " ⇉" + r.streams;
+        pct = String(Math.floor(r.cur / r.total * 100)).padStart(3) + "%";
+        size = fmt(r.cur) + " / ~" + fmt(r.total);
+      }
+      if (r.state !== "wait" && r.t >= 1) { speed = (r.cur / r.t).toFixed(1) + " MiB/s"; el = mmss(r.t); }
+      const plain = stage.replace(/<[^>]+>/g, "");
+      const cells = narrow
+        ? " " + pct
+        : " " + pad(pct, 4) + "  " + pad(size, 24) + pad(speed, 13) + el;
+      set(base + i, icon + " " + pad(r.name, 11) + " " + stage + " ".repeat(Math.max(1, (narrow ? 16 : 22) - plain.length)) +
+        bar(r.state === "done" ? 100 : r.cur / r.total * 100) + cells);
+    };
+    let tick = 0, elapsed = 0;
+    while (rows.some(r => r.state !== "done")) {
+      tick++; const dt = 0.09 * SIM; elapsed += dt;
+      rows.forEach(r => {
+        if (r.state === "wait" && (r.after === undefined || rows[r.after].state === "done")) r.state = "run";
+        if (r.state !== "run") return;
+        r.t += dt;
+        if (r.retry > 0) { r.retry--; return; }
+        if (r.retryAt && !r.retried && r.cur / r.total > r.retryAt) { r.retried = true; r.retry = 9; r.cur -= 160; return; }
+        r.cur = Math.min(r.total, r.cur + r.total / r.dur * dt * (0.7 + Math.random() * 0.6));
+        if (r.cur >= r.total) r.state = "done";
+      });
+      rows.forEach((r, i) => draw(r, i, tick));
+      await sleep(90);
+    }
+    push("");
+    push('<span class="c-warn">!</span> mysql:crm: events skipped' + (narrow ? "" : ": staging user cannot SHOW EVENTS"));
+    push("");
+    const secs = Math.round(elapsed);
+    push('<span class="c-ok">Done 3/3 databases</span> in ' + (secs >= 60 ? Math.floor(secs / 60) + "m" : "") + (secs % 60) + "s");
+    await sleep(4200);
+  }
+
+  async function staticFrame() {
+    screen.innerHTML = [
+      '<span class="c-acc">~/project</span> <span class="c-dim">$</span> dbclone',
+      "Checking local setup",
+      '  <span class="c-ok">✓</span> Docker  <span class="c-dim">29.8.2</span>',
+      '  <span class="c-ok">✓</span> mongo: local container "mongodb"  <span class="c-dim">running</span>',
+      '  <span class="c-ok">✓</span> mysql: local container "mysql"  <span class="c-dim">running</span>',
+      "",
+      "Cloning 3 databases · pool 8 streams · max 4 streams/db",
+      "",
+      '<span class="c-ok">✓</span> mongo:shop  done                  ' + bar(100) + " 100%  2.8 GiB",
+      '<span class="c-ok">✓</span> mysql:app   done                  ' + bar(100) + " 100%  820.0 MiB",
+      '<span class="c-ok">✓</span> mysql:crm   done                  ' + bar(100) + " 100%  260.0 MiB",
+      "",
+      '<span class="c-ok">Done 3/3 databases</span> in 1m52s',
+    ].join("\n");
+  }
+
+  if (reduce) { staticFrame(); return; }
+  // Start the demo when the terminal is visible; loop forever.
+  let started = false;
+  new IntersectionObserver(es => { if (!started && es[0].isIntersecting) { started = true; (async () => { for (;;) await demo(); })(); } }, { threshold: .2 }).observe(screen);
+})();
+</script>
+</body>
+</html>

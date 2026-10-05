@@ -1,5 +1,12 @@
 # dbclone
 
+[![CI](https://github.com/phuthuycoding/dbclone/actions/workflows/ci.yml/badge.svg)](https://github.com/phuthuycoding/dbclone/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/phuthuycoding/dbclone)](https://github.com/phuthuycoding/dbclone/releases/latest)
+[![Go Reference](https://pkg.go.dev/badge/github.com/phuthuycoding/dbclone.svg)](https://pkg.go.dev/github.com/phuthuycoding/dbclone)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
+**Website:** https://phuthuycoding.github.io/dbclone/
+
 Clone MongoDB and MySQL databases from a remote (staging) server into your local Docker
 containers — whole databases or just the tables/collections you pick — with parallel
 streaming, retries and a live progress view in the terminal.
