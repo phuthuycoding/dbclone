@@ -32,6 +32,7 @@ import (
 	"github.com/phuthuycoding/dbclone/internal/driver"
 	"github.com/phuthuycoding/dbclone/internal/driver/mongo"
 	"github.com/phuthuycoding/dbclone/internal/driver/mysql"
+	"github.com/phuthuycoding/dbclone/internal/preflight"
 	"github.com/phuthuycoding/dbclone/internal/ui"
 )
 
@@ -53,6 +54,7 @@ var (
 	all      = flag.Bool("all", false, "skip the picker and clone every database on staging")
 	fresh    = flag.Bool("fresh", false, "drop each local database first, so local ends up identical to staging")
 	logDir   = flag.String("logs", "logs", "directory for per-database logs")
+	check    = flag.Bool("check", false, "check the local setup (Docker, containers) and exit")
 	showVer  = flag.Bool("version", false, "print the version and exit")
 	setup    = flag.Bool("setup", false, "re-enter the staging connections even if the env file exists")
 )
@@ -77,30 +79,63 @@ func main() {
 }
 
 func run() error {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
+	report, dockerErr := preflight.Run(ctx, drivers)
 	found, err := config.Load(*envFile)
 	if err != nil {
 		return err
 	}
-	onboarded := false
-	if !found || *setup {
-		if *only != "" || *all {
-			return fmt.Errorf("cannot read %s; run without -only to enter the connections", *envFile)
+	needSetup := !found || *setup
+	if *check || needSetup || report.Failed() {
+		ui.PrintReport(report)
+	}
+	switch {
+	case dockerErr != nil:
+		return errors.New("fix Docker first (see above), then run dbclone again")
+	case len(report.Ready) == 0:
+		return errors.New("no usable local database container; see the fixes above")
+	case *check && report.Failed():
+		return errors.New("some engines cannot be used; see the fixes above")
+	case *check:
+		return nil
+	}
+	ready := report.Ready
+	scripted := *only != "" || *all
+	if needSetup && scripted {
+		return fmt.Errorf("no connection file %s; run dbclone without -only/-all once to set it up", *envFile)
+	}
+
+	// Ask for the source connections when needed, test them by listing databases, and on
+	// failure offer to re-enter them instead of exiting.
+	var available []clone.Job
+	var local map[string]bool
+	for {
+		if needSetup {
+			if err := ui.Onboard(ready); err != nil {
+				return err
+			}
 		}
-		if err := ui.Onboard(drivers); err != nil {
+		available, local, err = discover(ctx, ready)
+		if err == nil {
+			break
+		}
+		if scripted {
 			return err
 		}
-		onboarded = true
+		ui.PrintError(err)
+		again, cerr := ui.Confirm("Could not use the source connections. Enter them again?", "", "Re-enter", "Quit")
+		if cerr != nil {
+			return cerr
+		}
+		if !again {
+			return err
+		}
+		needSetup = true
 	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer stop()
-
-	available, local, err := discover(ctx)
-	if err != nil {
-		return err
-	}
-	if onboarded {
-		save, err := ui.Confirm("Staging connection OK. Save to "+*envFile+" for next time?",
+	if needSetup {
+		save, err := ui.Confirm("Source connections work. Save them to "+*envFile+" for next time?",
 			"The file holds passwords and is created with mode 0600", "Save", "Skip")
 		if err != nil {
 			return err
@@ -109,6 +144,7 @@ func run() error {
 			if err := config.Save(*envFile, drivers); err != nil {
 				return err
 			}
+			fmt.Println("saved " + *envFile)
 		}
 	}
 
@@ -187,33 +223,33 @@ func parseOnly(spec string, available []clone.Job) ([]clone.Job, error) {
 	return jobs, nil
 }
 
-// discover lists staging databases per configured driver, and which already exist locally.
-func discover(ctx context.Context) ([]clone.Job, map[string]bool, error) {
+// discover lists source databases per configured driver, and which already exist locally.
+func discover(ctx context.Context, ds []driver.Driver) ([]clone.Job, map[string]bool, error) {
 	var available []clone.Job
 	local := map[string]bool{}
 	used := 0
-	for _, d := range drivers {
+	for _, d := range ds {
 		if !d.Configured() {
 			continue
 		}
 		used++
 		names, err := d.ListSource(ctx)
 		if err != nil {
-			return nil, nil, fmt.Errorf("list %s databases on staging (wrong connection? rerun with -setup): %w", d.Name(), err)
+			return nil, nil, fmt.Errorf("cannot list %s databases on the source: %w", d.Name(), err)
 		}
 		for _, n := range names {
 			available = append(available, clone.Job{Driver: d, DB: n})
 		}
 		existing, err := d.ListLocal(ctx)
 		if err != nil {
-			return nil, nil, fmt.Errorf("list local %s databases (is the container running?): %w", d.Name(), err)
+			return nil, nil, fmt.Errorf("cannot list local %s databases: %w", d.Name(), err)
 		}
 		for _, n := range existing {
 			local[d.Name()+":"+n] = true
 		}
 	}
 	if used == 0 {
-		return nil, nil, errors.New("no staging connection configured; rerun with -setup")
+		return nil, nil, errors.New("no source connection entered for any engine")
 	}
 	return available, local, nil
 }

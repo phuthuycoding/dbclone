@@ -20,6 +20,16 @@ type Field struct {
 	Secret      bool
 }
 
+// Local is what a driver needs on this machine: a running container of the engine's
+// official image that carries its root credentials and the dump/restore tools.
+type Local struct {
+	Container    string   // container name in use
+	ContainerEnv string   // env var that overrides the container name
+	Tools        []string // binaries that must exist inside the container
+	Credentials  []string // env vars the container must carry (root credentials)
+	RunExample   string   // a docker run command that creates a suitable container
+}
+
 // Object is one table, view or collection inside a database.
 type Object struct {
 	Name string
@@ -55,6 +65,8 @@ type Driver interface {
 	Fields() []Field
 	// Configured reports whether enough settings are present to use the driver.
 	Configured() bool
+	// Local describes the local container the driver restores into.
+	Local() Local
 
 	// ListSource / ListLocal return user databases (system ones excluded).
 	ListSource(ctx context.Context) ([]string, error)

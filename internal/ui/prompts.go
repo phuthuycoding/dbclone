@@ -18,7 +18,18 @@ import (
 // Onboard asks for every driver's staging settings, prefilled from the environment, and
 // writes the answers back into it. Leaving a driver's fields blank skips that engine.
 func Onboard(drivers []driver.Driver) error {
-	var groups []*huh.Group
+	var targets []string
+	for _, d := range drivers {
+		targets = append(targets, fmt.Sprintf("%s → local container %q", d.Name(), d.Local().Container))
+	}
+	intro := huh.NewNote().
+		Title("dbclone setup").
+		Description("dbclone copies databases from a source server (e.g. staging) into your local containers.\n\n" +
+			"Next you enter the SOURCE connections. Nothing is asked for the local side; it uses:\n  " +
+			strings.Join(targets, "\n  ") + "\n\n" +
+			"Leave an engine empty to skip it. The connections are tested before anything is copied.").
+		Next(true)
+	groups := []*huh.Group{huh.NewGroup(intro)}
 	values := map[string]*string{}
 	for _, d := range drivers {
 		var fields []huh.Field
@@ -32,7 +43,7 @@ func Onboard(drivers []driver.Driver) error {
 			}
 			fields = append(fields, in)
 		}
-		groups = append(groups, huh.NewGroup(fields...).Title("Staging connection — "+d.Name()))
+		groups = append(groups, huh.NewGroup(fields...).Title("Source connection — "+d.Name()))
 	}
 	if err := huh.NewForm(groups...).Run(); err != nil {
 		return err

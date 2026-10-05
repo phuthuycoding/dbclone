@@ -34,6 +34,20 @@ streaming, retries and a live progress view in the terminal.
   dbclone reads them inside the container; you never type local credentials.
 - The source server must be reachable **from inside** the containers.
 
+Not sure your machine is ready? `dbclone -check` lists each requirement with ✓/✗ and the exact
+command to fix anything missing (Docker not installed, daemon not running, container missing
+or not from the official image). dbclone runs the same check on every start, and an engine
+whose local container is unusable is simply skipped.
+
+```
+Checking local setup
+  ✓ Docker  29.8.2
+  ✓ mongo: local container "mongodb"  running
+  ✗ mysql: local container "mysql" not found
+      create one:  docker run -d --name mysql -p 3306:3306 -e MYSQL_ROOT_PASSWORD=<password> mysql:8.4
+      or use an existing container:  DBCLONE_MYSQL_CONTAINER=<name> dbclone
+```
+
 ## Install
 
 ```bash
@@ -49,10 +63,11 @@ dbclone            # first run asks for the source connections, then lets you pi
 dbclone -setup     # re-enter the connections
 ```
 
-1. **Connections** — on first run you are asked for the source MongoDB URI and/or MySQL
-   host, port, user and password (leave an engine empty to skip it). Once they work, dbclone
-   offers to save them to `.env.staging` with mode `0600`. See
-   [`.env.staging.example`](.env.staging.example).
+1. **Connections** — on first run dbclone checks the local setup, then asks for the source
+   MongoDB URI and/or MySQL host, port, user and password — only for engines whose local
+   container is ready; leave one empty to skip it. The connections are tested right away; if
+   they fail you can re-enter them. Once they work, dbclone offers to save them to
+   `.env.staging` with mode `0600`. See [`.env.staging.example`](.env.staging.example).
 2. **Databases** — tick the databases to clone; ones that already exist locally are marked.
 3. **Narrow down** (optional) — pick which of those databases to restrict to specific
    tables/collections; each shows every object with its size, all ticked
@@ -78,6 +93,7 @@ dbclone -all -fresh -j 3 -w 2                               # everything, identi
 | `-env` | `.env.staging` | connection file |
 | `-logs` | `logs` | per-database tool output, one folder per run |
 | `-setup` | off | re-enter the connections |
+| `-check` | | check the local setup (Docker, containers) and exit |
 | `-version` | | print the version |
 
 ## What gets overwritten
@@ -125,6 +141,7 @@ main            flags + wiring
 internal/ui     terminal prompts and live progress
 internal/clone  engine: worker pool, dump → restore streaming, retries
 internal/driver adapter interface; one package per engine
+internal/preflight checks Docker and the local containers before anything runs
 internal/docker runs the engine's own tools inside the local containers
 internal/config connection file load/save
 ```

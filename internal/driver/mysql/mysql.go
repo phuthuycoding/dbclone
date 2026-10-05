@@ -75,6 +75,17 @@ func (*Driver) Configured() bool {
 
 func container() string { return driver.Env("DBCLONE_MYSQL_CONTAINER", "mysql") }
 
+func (*Driver) Local() driver.Local {
+	return driver.Local{
+		Container:    container(),
+		ContainerEnv: "DBCLONE_MYSQL_CONTAINER",
+		Tools:        []string{"mysql", "mysqldump"},
+		Credentials:  []string{"MYSQL_ROOT_PASSWORD"},
+		RunExample: "docker run -d --name " + container() + " -p 3306:3306 " +
+			"-e MYSQL_ROOT_PASSWORD=<password> mysql:8.4",
+	}
+}
+
 func sh(ctx context.Context, script string, stdin bool, vars map[string]string) *exec.Cmd {
 	env := map[string]string{
 		keyHost:     os.Getenv(keyHost),

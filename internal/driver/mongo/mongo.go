@@ -76,6 +76,17 @@ func (*Driver) Configured() bool { return os.Getenv(keyURI) != "" }
 
 func container() string { return driver.Env("DBCLONE_MONGO_CONTAINER", "mongodb") }
 
+func (*Driver) Local() driver.Local {
+	return driver.Local{
+		Container:    container(),
+		ContainerEnv: "DBCLONE_MONGO_CONTAINER",
+		Tools:        []string{"mongosh", "mongodump", "mongorestore"},
+		Credentials:  []string{"MONGO_INITDB_ROOT_USERNAME", "MONGO_INITDB_ROOT_PASSWORD"},
+		RunExample: "docker run -d --name " + container() + " -p 27017:27017 " +
+			"-e MONGO_INITDB_ROOT_USERNAME=root -e MONGO_INITDB_ROOT_PASSWORD=<password> mongo:7.0",
+	}
+}
+
 func sh(ctx context.Context, script string, stdin bool, vars map[string]string) *exec.Cmd {
 	env := map[string]string{keyURI: serverURI(os.Getenv(keyURI)), "DB": "", "COLL": "", "EXCLUDES": "", "WORKERS": "1"}
 	for k, v := range vars {
