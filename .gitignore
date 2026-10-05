@@ -1,0 +1,10 @@
+# connection files hold passwords
+.env
+.env.*
+!.env.staging.example
+
+# run output and builds
+logs/
+dist/
+/dbclone
+/dbclone.next
