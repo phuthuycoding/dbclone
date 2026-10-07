@@ -9,13 +9,13 @@ mình** (HN cấm text AI, Reddit phạt post giống marketing); file chỉ là
 - [x] Repo `homebrew-tap` + `scoop-bucket` tạo xong; goreleaser có `homebrew_casks` + `scoops`.
 - [ ] **Anh:** tạo PAT (fine-grained, Contents: Read & write trên `homebrew-tap` và
       `scoop-bucket`) rồi `gh secret set HOMEBREW_TAP_GITHUB_TOKEN -R phuthuycoding/dbclone`.
-- [ ] Merge nhánh `phuthuycoding/feat/launch-prep`, tag `v0.3.0` → release tự đẩy cask + manifest.
+- [ ] Merge PR https://github.com/phuthuycoding/dbclone/pull/1 (nhánh `phuthuycoding/feat/launch-prep`), tag `v0.3.0` → release tự đẩy cask + manifest.
 - [ ] Kiểm tra `brew install phuthuycoding/tap/dbclone` trên máy Mac thật.
 - [ ] GIF demo (vhs qua Docker) chèn README + site.
 - [x] Reddit đã login (Google) trong Chrome profile phuthuycoding.
 - [ ] Comment thật ở r/golang, r/devops, HN mỗi ngày (không link dbclone).
-- [ ] PR awesome-mongodb (`awesome-lists.md`).
-- [ ] Email Console.dev + Golang Weekly (`emails.md`).
+- [x] PR awesome-mongodb mở rồi: https://github.com/ramnes/awesome-mongodb/pull/177 (mục Tools › Data).
+- [ ] Email Console.dev + Golang Weekly: **draft đã nằm trong Gmail** (tamanhquyen.it@gmail.com → Drafts), anh đọc rồi bấm gửi.
 - [x] Bài dev.to đã lưu **Draft** (tag go/docker/mongodb/mysql, AI disclosure = AI-assisted), chưa publish:
       https://dev.to/dashboard → "Cloning a staging MongoDB and MySQL…". Anh đọc lại, sửa giọng, publish tối Show HN.
 
