@@ -12,10 +12,12 @@ mình** (HN cấm text AI, Reddit phạt post giống marketing); file chỉ là
 - [ ] Merge nhánh `phuthuycoding/feat/launch-prep`, tag `v0.3.0` → release tự đẩy cask + manifest.
 - [ ] Kiểm tra `brew install phuthuycoding/tap/dbclone` trên máy Mac thật.
 - [ ] GIF demo (vhs qua Docker) chèn README + site.
+- [x] Reddit đã login (Google) trong Chrome profile phuthuycoding.
 - [ ] Comment thật ở r/golang, r/devops, HN mỗi ngày (không link dbclone).
 - [ ] PR awesome-mongodb (`awesome-lists.md`).
 - [ ] Email Console.dev + Golang Weekly (`emails.md`).
-- [ ] Đăng bài dev.to ở chế độ draft, đọc lại (`dev-to.md`).
+- [x] Bài dev.to đã lưu **Draft** (tag go/docker/mongodb/mysql, AI disclosure = AI-assisted), chưa publish:
+      https://dev.to/dashboard → "Cloning a staging MongoDB and MySQL…". Anh đọc lại, sửa giọng, publish tối Show HN.
 
 ## Tuần 2 — launch (giờ VN)
 
