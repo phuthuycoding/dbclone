@@ -11,3 +11,5 @@ dist/
 
 # profiles hold passwords
 profiles.json
+
+.playwright-mcp
