@@ -26,3 +26,38 @@ changelog:
   sort: asc
   filters:
     exclude: ["^docs:", "^test:", "^chore:"]
+
+# Package managers. Both publish to repos owned by the same account, which the default
+# GITHUB_TOKEN cannot write to, so the release workflow passes a PAT as
+# HOMEBREW_TAP_GITHUB_TOKEN (contents: write on homebrew-tap and scoop-bucket).
+homebrew_casks:
+  - name: dbclone
+    repository:
+      owner: phuthuycoding
+      name: homebrew-tap
+      branch: main
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    directory: Casks
+    homepage: https://phuthuycoding.github.io/dbclone/
+    description: Clone MongoDB and MySQL databases between any two connections through local Docker containers
+    license: MIT
+    binaries:
+      - dbclone
+    commit_author:
+      name: goreleaserbot
+      email: bot@goreleaser.com
+
+scoops:
+  - name: dbclone
+    repository:
+      owner: phuthuycoding
+      name: scoop-bucket
+      branch: main
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    directory: bucket
+    homepage: https://phuthuycoding.github.io/dbclone/
+    description: Clone MongoDB and MySQL databases between any two connections through local Docker containers
+    license: MIT
+    commit_author:
+      name: goreleaserbot
+      email: bot@goreleaser.com

@@ -67,10 +67,13 @@ Checking local setup
 ## Install
 
 ```bash
-go install github.com/phuthuycoding/dbclone@latest
+brew install phuthuycoding/tap/dbclone        # macOS (Homebrew)
+scoop bucket add phuthuycoding https://github.com/phuthuycoding/scoop-bucket && scoop install dbclone   # Windows
+go install github.com/phuthuycoding/dbclone@latest   # any OS with Go
 ```
 
-or download a binary from [Releases](https://github.com/phuthuycoding/dbclone/releases).
+or download a binary from [Releases](https://github.com/phuthuycoding/dbclone/releases)
+(linux / macOS / windows, amd64 / arm64).
 
 ## Usage
 
