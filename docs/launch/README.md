@@ -16,8 +16,7 @@ mình** (HN cấm text AI, Reddit phạt post giống marketing); file chỉ là
 - [ ] Comment thật ở r/golang, r/devops, HN mỗi ngày (không link dbclone).
 - [x] PR awesome-mongodb mở rồi: https://github.com/ramnes/awesome-mongodb/pull/177 (mục Tools › Data).
 - [ ] Email Console.dev (hello@console.dev) + Golang Weekly (editor@cooperpress.com): text sẵn trong `emails.md`; Gmail compose bị đóng trước khi autosave nên chưa có draft, anh copy gửi tay.
-- [x] Bài dev.to đã lưu **Draft** (tag go/docker/mongodb/mysql, AI disclosure = AI-assisted), chưa publish:
-      https://dev.to/dashboard → "Cloning a staging MongoDB and MySQL…". Anh đọc lại, sửa giọng, publish tối Show HN.
+- [x] Bài dev.to **đã publish 2026-10-07**: https://dev.to/phuthuycoding/cloning-a-staging-mongodb-and-mysql-to-your-laptop-without-installing-a-single-database-client-12dm (tag go/docker/mongodb/mysql, AI disclosure = AI-assisted).
 
 ## Tuần 2 — launch (giờ VN)
 
