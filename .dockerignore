@@ -1,0 +1,8 @@
+.git
+dist
+logs
+docs
+.env
+.env.*
+profiles.json
+.znf

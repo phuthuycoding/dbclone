@@ -75,6 +75,25 @@ go install github.com/phuthuycoding/dbclone@latest   # any OS with Go
 or download a binary from [Releases](https://github.com/phuthuycoding/dbclone/releases)
 (linux / macOS / windows, amd64 / arm64).
 
+### Or run everything with Docker Compose
+
+No Go, no binary: the repo's [`compose.yaml`](compose.yaml) starts local MongoDB and MySQL from
+the official images, already carrying the root credentials dbclone expects, and builds the CLI
+into a small image that talks to them over the Docker socket.
+
+```bash
+git clone https://github.com/phuthuycoding/dbclone && cd dbclone
+docker compose up -d                      # mongodb + mysql
+docker compose run --rm dbclone -check    # ✓ Docker, ✓ mongo, ✓ mysql
+docker compose run --rm dbclone           # add profiles, pick FROM / TO / databases
+docker compose run --rm dbclone -from staging -only mongo:shop -yes
+```
+
+Profiles persist in the `dbclone-config` volume; logs land in `./logs`. Override ports or
+names with `DBCLONE_MONGO_PORT`, `DBCLONE_MYSQL_PORT`, `DBCLONE_MONGO_CONTAINER`,
+`DBCLONE_MYSQL_CONTAINER`, and the local root password with `DBCLONE_LOCAL_PASSWORD`
+(default `dbclone`; it only guards the databases on your machine).
+
 ## Usage
 
 ```bash

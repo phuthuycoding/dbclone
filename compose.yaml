@@ -1,0 +1,57 @@
+# Everything dbclone needs, with nothing installed on the host but Docker:
+#
+#   docker compose up -d                 # local MongoDB + MySQL from the official images
+#   docker compose run --rm dbclone      # the CLI itself, talking to them over the Docker socket
+#
+# Ports, container names and the local root password can be overridden from the
+# environment (DBCLONE_MONGO_PORT, DBCLONE_MYSQL_PORT, DBCLONE_MONGO_CONTAINER,
+# DBCLONE_MYSQL_CONTAINER, DBCLONE_LOCAL_PASSWORD). The password only guards databases
+# on your own machine; dbclone reads it from the containers and never asks for it.
+
+services:
+  mongodb:
+    image: mongo:7
+    container_name: ${DBCLONE_MONGO_CONTAINER:-mongodb}
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: ${DBCLONE_LOCAL_PASSWORD:-dbclone}
+    ports:
+      - "${DBCLONE_MONGO_PORT:-27017}:27017"
+    volumes:
+      - mongodb-data:/data/db
+    restart: unless-stopped
+
+  mysql:
+    image: mysql:8.4
+    container_name: ${DBCLONE_MYSQL_CONTAINER:-mysql}
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DBCLONE_LOCAL_PASSWORD:-dbclone}
+    ports:
+      - "${DBCLONE_MYSQL_PORT:-3306}:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+    restart: unless-stopped
+
+  # Not started by `up`; run it on demand: docker compose run --rm dbclone [flags]
+  dbclone:
+    build: .
+    image: dbclone:local
+    profiles: [cli]
+    environment:
+      DBCLONE_MONGO_CONTAINER: ${DBCLONE_MONGO_CONTAINER:-mongodb}
+      DBCLONE_MYSQL_CONTAINER: ${DBCLONE_MYSQL_CONTAINER:-mysql}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock   # dbclone runs `docker exec` into the two containers above
+      - dbclone-config:/root/.config/dbclone        # profiles.json (mode 0600) survives between runs
+      - ./logs:/work/logs                           # per-run tool output lands next to this file
+    working_dir: /work
+    stdin_open: true
+    tty: true
+    depends_on:
+      - mongodb
+      - mysql
+
+volumes:
+  mongodb-data:
+  mysql-data:
+  dbclone-config:

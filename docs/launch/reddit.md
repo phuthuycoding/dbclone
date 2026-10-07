@@ -51,8 +51,9 @@ genuinely answers someone's question.
 
 ## r/selfhosted — ONLY in the "New Project Megathread" until 2027-01-02 (rule 6, verified)
 
-Comment, Fri 2026-10-16: 3 lines. Rule 2 wants "production ready and have docs" — point at
-the README flag table and `-check`. Wednesday exception (rule 5) allows tool posts with the
+Comment, Fri 2026-10-16: 3 lines. Lead with `docker compose up -d && docker compose run --rm dbclone`
+(nothing but Docker on the host — the self-hosted angle). Rule 2 wants "production ready and
+have docs" — point at the README flag table and `-check`. Wednesday exception (rule 5) allows tool posts with the
 right flair; still a 3-month-old project is megathread-only, so wait.
 
 ## r/commandline — NOT before 2026-11-02 (rule 5: no projects newer than 30 days, verified)
