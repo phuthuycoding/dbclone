@@ -13,3 +13,6 @@ dist/
 profiles.json
 
 .playwright-mcp
+
+# kanban-flow
+.works/

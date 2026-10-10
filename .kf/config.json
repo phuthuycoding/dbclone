@@ -1,0 +1,144 @@
+{
+  "schema": "kanban-flow",
+  "contexts": [
+    "clone",
+    "engines",
+    "profiles",
+    "preflight",
+    "tui",
+    "docker"
+  ],
+  "stacks": [
+    "go"
+  ],
+  "reviewer": "Quyền",
+  "repository": "phuthuycoding/dbclone",
+  "agents": [
+    "claude"
+  ],
+  "skills": {
+    "scope": "global"
+  },
+  "harness": {
+    "main": "architect",
+    "roles": {
+      "architect": {
+        "runner": "claude",
+        "brief": "Orchestrates the pipeline and keeps the human gates. Decides transitions; does not do a stage's work when that stage has its own role."
+      },
+      "researcher": {
+        "runner": "claude",
+        "brief": "Explores breadth: prior art, libraries, existing code paths, comparable features. Reports findings and trade-offs; does not design or write the spec."
+      },
+      "writer": {
+        "runner": "claude",
+        "brief": "Turns agreed decisions into precise prose that follows the template exactly. Adds no scope of its own."
+      },
+      "coder": {
+        "runner": "claude",
+        "brief": "Implements the approved plan and keeps the build green. Changes nothing outside the approved contract."
+      },
+      "tester": {
+        "runner": "claude",
+        "brief": "Runs the real test suite against the approved test cases and records evidence with exact commands and exit codes. Never claims a result it did not observe."
+      },
+      "reviewer": {
+        "runner": "claude",
+        "brief": "Audits the diff against the contract and the review rules, hunting for failures the author would not see. Reproduces plausible failures instead of guessing."
+      }
+    },
+    "stages": {},
+    "runners": {
+      "claude": {
+        "start": [
+          "claude",
+          "-p",
+          "{prompt}",
+          "--session-id",
+          "{session}",
+          "--permission-mode",
+          "acceptEdits",
+          "--output-format",
+          "json"
+        ],
+        "resume": [
+          "claude",
+          "-p",
+          "{prompt}",
+          "-r",
+          "{session}",
+          "--permission-mode",
+          "acceptEdits",
+          "--output-format",
+          "json"
+        ],
+        "session": "provided",
+        "usage": "json"
+      },
+      "codex": {
+        "start": [
+          "codex",
+          "exec",
+          "--json",
+          "{prompt}"
+        ],
+        "resume": [
+          "codex",
+          "exec",
+          "resume",
+          "{session}",
+          "{prompt}"
+        ],
+        "session": {
+          "stdout": "\"thread_id\":\"([^\"]+)\""
+        },
+        "usage": "json"
+      },
+      "devin": {
+        "start": [
+          "devin",
+          "-p",
+          "{prompt}",
+          "--permission-mode",
+          "accept-edits"
+        ],
+        "resume": [
+          "devin",
+          "-p",
+          "{prompt}",
+          "-r",
+          "{session}",
+          "--permission-mode",
+          "accept-edits"
+        ],
+        "session": {
+          "command": [
+            "devin",
+            "list",
+            "--format",
+            "json"
+          ],
+          "idField": "id",
+          "matchField": "title"
+        }
+      },
+      "gemini": {
+        "start": [
+          "gemini",
+          "-p",
+          "{prompt}",
+          "--approval-mode",
+          "auto_edit"
+        ]
+      },
+      "opencode": {
+        "start": [
+          "opencode",
+          "run",
+          "{prompt}"
+        ]
+      }
+    }
+  },
+  "created": "20261010_1947"
+}
