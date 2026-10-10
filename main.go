@@ -34,6 +34,7 @@ import (
 	"github.com/phuthuycoding/dbclone/internal/driver"
 	"github.com/phuthuycoding/dbclone/internal/driver/mongo"
 	"github.com/phuthuycoding/dbclone/internal/driver/mysql"
+	"github.com/phuthuycoding/dbclone/internal/driver/postgres"
 	"github.com/phuthuycoding/dbclone/internal/preflight"
 	"github.com/phuthuycoding/dbclone/internal/ui"
 )
@@ -45,6 +46,7 @@ var version = "dev"
 var drivers = []driver.Driver{
 	mongo.New(),
 	mysql.New(),
+	postgres.New(),
 }
 
 var (
@@ -53,7 +55,7 @@ var (
 	to         = flag.String("to", "", "target profile (default local; asked when empty and run interactively)")
 	confirm    = flag.String("confirm", "", "the target profile name, required to write to a non-local target without the prompt")
 	parallel   = flag.Int("j", 8, "global pool: concurrent dump→restore streams across all databases")
-	workers    = flag.Int("w", 4, "max concurrent streams for one database (mongo collections / mysql table groups)")
+	workers    = flag.Int("w", 4, "max concurrent streams for one database (mongo collections / mysql table groups / pg_restore jobs)")
 	only       = flag.String("only", "", "skip the picker: comma list of engine:db or engine:db.table, e.g. mongo:shop.orders,mysql:app")
 	yes        = flag.Bool("yes", false, "do not ask before overwriting databases on the local target")
 	all        = flag.Bool("all", false, "skip the picker and clone every database of the source")

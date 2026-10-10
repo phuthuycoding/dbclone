@@ -1,11 +1,12 @@
 # Everything dbclone needs, with nothing installed on the host but Docker:
 #
-#   docker compose up -d                 # local MongoDB + MySQL from the official images
+#   docker compose up -d                 # local MongoDB + MySQL + Postgres from the official images
 #   docker compose run --rm dbclone      # the CLI itself, talking to them over the Docker socket
 #
 # Ports, container names and the local root password can be overridden from the
-# environment (DBCLONE_MONGO_PORT, DBCLONE_MYSQL_PORT, DBCLONE_MONGO_CONTAINER,
-# DBCLONE_MYSQL_CONTAINER, DBCLONE_LOCAL_PASSWORD). The password only guards databases
+# environment (DBCLONE_MONGO_PORT, DBCLONE_MYSQL_PORT, DBCLONE_POSTGRES_PORT,
+# DBCLONE_MONGO_CONTAINER, DBCLONE_MYSQL_CONTAINER, DBCLONE_POSTGRES_CONTAINER,
+# DBCLONE_LOCAL_PASSWORD). The password only guards databases
 # on your own machine; dbclone reads it from the containers and never asks for it.
 
 services:
@@ -32,6 +33,17 @@ services:
       - mysql-data:/var/lib/mysql
     restart: unless-stopped
 
+  postgres:
+    image: postgres:17
+    container_name: ${DBCLONE_POSTGRES_CONTAINER:-postgres}
+    environment:
+      POSTGRES_PASSWORD: ${DBCLONE_LOCAL_PASSWORD:-dbclone}
+    ports:
+      - "${DBCLONE_POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    restart: unless-stopped
+
   # Not started by `up`; run it on demand: docker compose run --rm dbclone [flags]
   dbclone:
     build: .
@@ -40,8 +52,9 @@ services:
     environment:
       DBCLONE_MONGO_CONTAINER: ${DBCLONE_MONGO_CONTAINER:-mongodb}
       DBCLONE_MYSQL_CONTAINER: ${DBCLONE_MYSQL_CONTAINER:-mysql}
+      DBCLONE_POSTGRES_CONTAINER: ${DBCLONE_POSTGRES_CONTAINER:-postgres}
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock   # dbclone runs `docker exec` into the two containers above
+      - /var/run/docker.sock:/var/run/docker.sock   # dbclone runs `docker exec` into the three containers above
       - dbclone-config:/root/.config/dbclone        # profiles.json (mode 0600) survives between runs
       - ./logs:/work/logs                           # per-run tool output lands next to this file
     working_dir: /work
@@ -50,8 +63,10 @@ services:
     depends_on:
       - mongodb
       - mysql
+      - postgres
 
 volumes:
   mongodb-data:
   mysql-data:
+  postgres-data:
   dbclone-config:
