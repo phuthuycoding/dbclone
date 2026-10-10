@@ -7,7 +7,7 @@
 
 **Website:** https://phuthuycoding.github.io/dbclone/
 
-Clone MongoDB and MySQL databases between **any two connections** — staging → local,
+Clone MongoDB, MySQL and PostgreSQL databases between **any two connections** — staging → local,
 prod → local, local → staging, staging → another server — whole databases or just the
 tables/collections you pick, with parallel streaming, retries and a live progress view in the
 terminal.
@@ -40,13 +40,15 @@ Cloning 3 databases prod → local · pool 8 streams · max 4 streams/db
 
 ## Requirements
 
-- Docker, with local MongoDB / MySQL running from the official images (`mongo`, `mysql`).
-  Their tools run every dump and restore — also when neither side is local. By default the
-  containers are named `mongodb` and `mysql`; override with `DBCLONE_MONGO_CONTAINER` /
-  `DBCLONE_MYSQL_CONTAINER`.
+- Docker, with local MongoDB / MySQL / PostgreSQL running from the official images
+  (`mongo`, `mysql`, `postgres`). Their tools run every dump and restore — also when
+  neither side is local. By default the containers are named `mongodb`, `mysql` and
+  `postgres`; override with `DBCLONE_MONGO_CONTAINER` / `DBCLONE_MYSQL_CONTAINER` /
+  `DBCLONE_POSTGRES_CONTAINER`.
 - The local containers must carry their root credentials in the environment —
-  `MONGO_INITDB_ROOT_USERNAME` / `MONGO_INITDB_ROOT_PASSWORD` for Mongo and
-  `MYSQL_ROOT_PASSWORD` for MySQL — which is how the official images are normally configured.
+  `MONGO_INITDB_ROOT_USERNAME` / `MONGO_INITDB_ROOT_PASSWORD` for Mongo,
+  `MYSQL_ROOT_PASSWORD` for MySQL and `POSTGRES_PASSWORD` for Postgres — which is how
+  the official images are normally configured.
   They are used for the `local` profile; you never type local credentials.
 - Remote servers must be reachable **from inside** the containers.
 
@@ -77,21 +79,23 @@ or download a binary from [Releases](https://github.com/phuthuycoding/dbclone/re
 
 ### Or run everything with Docker Compose
 
-No Go, no binary: the repo's [`compose.yaml`](compose.yaml) starts local MongoDB and MySQL from
+No Go, no binary: the repo's [`compose.yaml`](compose.yaml) starts local MongoDB, MySQL and
+PostgreSQL from
 the official images, already carrying the root credentials dbclone expects, and builds the CLI
 into a small image that talks to them over the Docker socket.
 
 ```bash
 git clone https://github.com/phuthuycoding/dbclone && cd dbclone
-docker compose up -d                      # mongodb + mysql
-docker compose run --rm dbclone -check    # ✓ Docker, ✓ mongo, ✓ mysql
+docker compose up -d                      # mongodb + mysql + postgres
+docker compose run --rm dbclone -check    # ✓ Docker, ✓ mongo, ✓ mysql, ✓ postgres
 docker compose run --rm dbclone           # add profiles, pick FROM / TO / databases
 docker compose run --rm dbclone -from staging -only mongo:shop -yes
 ```
 
 Profiles persist in the `dbclone-config` volume; logs land in `./logs`. Override ports or
-names with `DBCLONE_MONGO_PORT`, `DBCLONE_MYSQL_PORT`, `DBCLONE_MONGO_CONTAINER`,
-`DBCLONE_MYSQL_CONTAINER`, and the local root password with `DBCLONE_LOCAL_PASSWORD`
+names with `DBCLONE_MONGO_PORT`, `DBCLONE_MYSQL_PORT`, `DBCLONE_POSTGRES_PORT`,
+`DBCLONE_MONGO_CONTAINER`, `DBCLONE_MYSQL_CONTAINER`, `DBCLONE_POSTGRES_CONTAINER`,
+and the local root password with `DBCLONE_LOCAL_PASSWORD`
 (default `dbclone`; it only guards the databases on your machine).
 
 ## Usage
@@ -101,8 +105,8 @@ dbclone            # first run: add profiles, then pick FROM, TO and the databas
 dbclone -setup     # add, edit or delete profiles
 ```
 
-1. **Profiles** — a profile is a named connection: a MongoDB URI and/or MySQL host, port, user
-   and password. On first run dbclone checks the local setup and opens the profile manager.
+1. **Profiles** — a profile is a named connection: a MongoDB URI and/or MySQL and
+   PostgreSQL host, port, user and password. On first run dbclone checks the local setup and opens the profile manager.
    Profiles live in `<user config dir>/dbclone/profiles.json` (mode `0600`; `-config` to use
    another file). An old `.env.staging` in the current directory is imported once as `staging`.
    Example: [`profiles.example.json`](profiles.example.json).
